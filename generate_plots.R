@@ -3,12 +3,12 @@ library(ggplot2)
 library(tidyr)
 library(dplyr)
 
-# Caricamento dati
+# Leggo il dataset dal file Excel che ho scaricato e preparato
 dati <- read_xlsx("dati_report.xlsx")
-# Creazione sequenza temporale (mensile da Gen 1980)
+# Ricostruisco l'asse temporale, sapendo che i dati partono da Gennaio 1980 con cadenza mensile
 date_seq <- seq(as.Date("1980-01-01"), by = "month", length.out = nrow(dati))
 
-# Prep data
+# Rinomino le colonne per comodità e unisco le date al dataframe per facilitare i plot successivi
 dati_plot <- dati
 dati_plot$Date <- date_seq
 colnames(dati_plot)[1:3] <- c("Produzione_Industriale", "Occupazione", "Reddito_Reale")
@@ -16,7 +16,7 @@ colnames(dati_plot)[1:3] <- c("Produzione_Industriale", "Occupazione", "Reddito_
 dati_long <- pivot_longer(dati_plot, cols = c("Produzione_Industriale", "Occupazione", "Reddito_Reale"), 
                           names_to = "Variabile", values_to = "Valore")
 
-# Normalize data for plotting together
+# Scalo le variabili (le normalizzo) per poterle confrontare visivamente nello stesso grafico senza distorsioni
 dati_long <- dati_long %>%
   group_by(Variabile) %>%
   mutate(Valore_Normalizzato = scale(Valore))
@@ -35,7 +35,7 @@ p1 <- ggplot(dati_long, aes(x = Date, y = Valore_Normalizzato, color = Variabile
 
 ggsave("plot_serie_storiche.png", p1, width = 10, height = 6, dpi=300)
 
-# Tassi di crescita (Differenze logaritmiche)
+# Calcolo i tassi di crescita mensili usando la prima differenza dei logaritmi. Scarto il primo mese che ovviamente sarà NA.
 dati_crescita <- dati_plot %>%
   mutate(
     Prod_Growth = c(NA, diff(log(Produzione_Industriale))) * 100,

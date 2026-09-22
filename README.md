@@ -42,11 +42,11 @@ Per verificare questa ipotesi, ho selezionato il numero di *lag* ottimali tramit
 
 ```r
 library(urca)
-# Selezione del numero di ritardi
+# Faccio calcolare al criterio BIC il numero di ritardi ottimali
 lag_select <- VARselect(stima, lag.max = 12, type = "both")
 K_opt <- lag_select$selection['SC(n)']
 
-# Test di Cointegrazione di Johansen (Trace Test)
+# Eseguo il test di Johansen (Trace Test) per capire se le serie sono cointegrate
 vecm_jo <- ca.jo(stima, type = "trace", ecdet = "const", K = K_opt, spec = "longrun")
 summary(vecm_jo)
 ```
@@ -84,10 +84,10 @@ La selezione dei criteri d'informazione suggeriva un VAR con $p=1$.
 
 ```r
 library(vars)
-# Stima preliminare VAR(1)
+# Parto con una stima preliminare usando un solo ritardo (VAR(1))
 modL1 <- vars::VAR(df, p = 1, type = "const")
 
-# Diagnostica Autocorrelazione ed Eteroschedasticità (Ljung-Box test)
+# Controllo subito se i residui nascondono ancora autocorrelazione
 Box.test(resid(modL1)[,1], lag=12, type="Ljung")
 ```
 
@@ -107,10 +107,10 @@ Le forti **correlazioni contemporanee** dei residui (es. 0.73 tra Produzione e O
 Il vero fulcro analitico è capire chi "guida" il sistema. Tramite i test di **Causalità di Granger** e l'analisi **IRF (Impulse Response Function)**, ho districato la reazione a catena.
 
 ```r
-# Test di Granger di sistema: La produzione causa l'intero sistema?
+# Verifico se la produzione industriale è in grado di prevedere da sola il resto del sistema
 causality(modL2, cause="Prod")
 
-# Test a coppie (Pairwise)
+# Controllo il legame specifico: la produzione causa l'occupazione?
 grangertest(df[, "Occ"] ~ df[, "Prod"], order = 2)
 ```
 

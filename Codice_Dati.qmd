@@ -14,7 +14,7 @@ library(tidyverse)
 library(lubridate)
 library(writexl)
 
-# Funzione per scaricare le serie
+# Mi preparo una funzione di appoggio per scaricare comodamente le serie storiche dal database FRED
 scarica_serie = function(codice, nome_locale) {
   fredr(
     series_id = codice,
@@ -29,14 +29,14 @@ scarica_serie = function(codice, nome_locale) {
 ```{r,warning=FALSE}
 fredr_set_key("9eee0c9287f7b0617713617ea49884a6")
 
-# Codice e nome delle serie da analizzare
+# Definisco qui i codici delle serie FRED che mi interessano e come voglio rinominarle nel mio dataset
 codice_serie = list(
   INDPRO   = "Indice prod",
   PAYEMS  = "Occ. no agri",
   W875RX1  = "Redditto personale"
 )
 
-# Costruzione del data.frame
+# Ora ciclo sulle serie, le scarico una ad una e le unisco (join) sfruttando la data come chiave
 df = NULL
 for (codice in names(codice_serie)) {
   nome_locale = codice_serie[[codice]]

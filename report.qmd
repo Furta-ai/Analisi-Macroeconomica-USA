@@ -76,7 +76,7 @@ plot.ts(Serie)
 ```
 
 ```{r,fig.width=10,fig.height=7,dpi=300,fig.align='center',fig.cap="Grafici della trasformata logaritmica delle serie storiche solo all'interno dell'insieme di stima."}
-# Suddivisione in insieme di stima e verifica
+# Divido il dataset: una parte per stimare il modello e gli ultimi mesi per testarlo
 stima = window(Log.Serie, end = c(2021, 6))
 test = window(Log.Serie, start = c(2021, 7))
 plot.ts(stima)
@@ -219,11 +219,11 @@ Per concludere la fase di test e confermare definitivamente che possiamo trattar
 
 ```{r}
 # --- Verifica sulle Differenze Prime (per confermare I(1)) ---
-# Produzione Industriale (Differenze)
+# Controllo se la Produzione diventa stazionaria dopo la prima differenza
 summary(ur.df(diff(stima[,1]), type="drift", lags=12, selectlags = "BIC"))
-# Occupazione non agricola (Differenze)
+# Faccio lo stesso test sulle differenze per l'Occupazione
 summary(ur.df(diff(stima[,2]), type="drift", lags=12, selectlags = "BIC"))
-# Reddito Reale Personale (Differenze)
+# E infine verifico il Reddito differenziato
 summary(ur.df(diff(stima[,3]), type="drift", lags=12, selectlags = "BIC"))
 ```
 
@@ -236,7 +236,7 @@ I test sulle differenze prime mostrano un rifiuto di $H_0$. Poiché per tutte le
 Prima di stimare il $\text{VECM}$ si va a determinare il rango di cointegrazione (massimo due vettori di integrazione visto che si hanno solo tre serie), se esiste almeno un vettore di cointegrazione ha senso andare a stimare un $\text{VECM}$.
 
 ```{r,warning=FALSE}
-# 1. Selezione del numero di ritardi (Lag Length)
+# Chiedo all'algoritmo di trovarmi il numero ideale di ritardi (lag)
 lag_select = VARselect(stima, lag.max = 12, type = "both")
 print(lag_select$selection)
 
@@ -260,7 +260,7 @@ Si assume pertanto che le serie presentino trend lineari stocastici che si annul
 #### Test della Traccia
 
 ```{r}
-# Test di Cointegrazione (Trace Test)
+# Uso il Trace Test di Johansen per vedere se le serie si muovono insieme nel lungo periodo
 vecm_jo = ca.jo(stima, type = "trace", ecdet = "const",
                  K = K_opt, spec = "longrun")
 summary(vecm_jo)
@@ -299,9 +299,9 @@ Si normalizza per la prima variabile, la produzione industriale.
 #### Relazioni di Lungo Periodo (Matrice $\beta$)
 
 ```{r}
-# Si stima il VECM ristretto con rango r = 1
+# Visto che abbiamo un vettore di cointegrazione, stimo il VECM di conseguenza
 vecm_rls = cajorls(vecm_jo, r = 1)
-# Si mostra i coefficienti delle relazioni di lungo periodo (Beta)
+# Guardo i coefficienti Beta per interpretare l'equilibrio strutturale
 print(round(vecm_rls$beta,2))
 ```
 
@@ -314,7 +314,7 @@ La relazione di lungo periodo mostra che la produzione industriale è legata pos
 #### Coefficienti di Aggiustamento (Matrice $\alpha$)
 
 ```{r}
-# Coefficienti di aggiustamento (Alpha / Loading Matrix)
+# Estrapolo le costanti di aggiustamento (Alpha) per vedere quanto velocemente si riassorbono gli shock
 print(vecm_rls$rlm$coefficients[grep("ect",
                                      rownames(vecm_rls$rlm$coefficients)), ])
 ```
@@ -334,10 +334,10 @@ In sintesi, sebbene il test di Johansen identifichi una relazione di cointegrazi
 Per affrontare la non stazionarietà (trend) osservata nei dati in livelli, si applica una trasformazione in differenze logaritmiche. Questo permette di analizzare i tassi di crescita mensili approssimati, che dovrebbero essere stazionari.
 
 ```{r,fig.width=10,fig.height=7,dpi=300,fig.align='center',fig.cap="Grafici dei tassi di crescita approssimati: Produzione Industriale, Occupazione Non Agricola e Reddito Personale Reale"}
-# Trasformazione dell'intero insieme dei dati
+# Trasformo tutto in tassi di crescita (differenze logaritmiche) per evitare trend spuri
 dati_trasf = diff(Log.Serie)*100
 
-# Calcola le differenze logaritmiche (tassi di crescita)
+# Calcolo le differenze logaritmiche per avere la variazione percentuale mensile
 df = diff(stima) * 100
 # --- Grafico delle serie ---
 plot.ts(df)
@@ -367,13 +367,13 @@ Dall'analisi dei correlogrammi e dal test di Ljung-Box è evidente che non basta
 Dalla funzione di autocorrelazione globale della serie dei tassi ha senso proporre un $\text{MA(1)}$ o un $\text{AR(1)}$.
 
 ```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi dei residui di un MA(1) applicato alla serie differenziata: Produzione Industriale"}
-# Stima del modello
+# Provo ad adattare un modello ARMA per pulire la serie
 fit.p.prod = arima(na.omit(df[,1]),
                    order = c(0,0,1))
 fit.p.prod1 = arima(na.omit(df[,1]),
                    order = c(1,0,0))
 
-# Confronto BIC
+# Guardo il BIC per decidere quale modello si adatta meglio senza essere troppo complesso
 BIC(fit.p.prod)
 BIC(fit.p.prod1)
 
@@ -381,11 +381,11 @@ BIC(fit.p.prod1)
 par(mfrow=c(1,2))
 acf(fit.p.prod$residuals,main="Residui MA(1) - Produzione Industriale")
 pacf(fit.p.prod$residuals,main="Residui MA(1) - Produzione Industriale")
-# Controllo stazionarietà ed invertibilità
+# Mi assicuro che il modello MA/AR stimato sia matematicamente sensato
 check_stationarity_invertibility(fit.p.prod)
-# Test di significatività dei coefficienti stimati
+# Vedo se i parametri che ho trovato sono statisticamente significativi
 significativita_arima(fit.p.prod)
-# Test Ljung-Box per correlazione seriale residui
+# Uso Ljung-Box per assicurarmi di aver rimosso tutta l'autocorrelazione
 Box.test(fit.p.prod$residuals,24,type="Ljung",fitdf=1)
 CCF_prod = fit.p.prod$residuals
 ```
@@ -535,9 +535,9 @@ pval = matrix(NA, 2, NCOL(res_modL1))
 colnames(pval) = colnames(res_modL1)
 rownames(pval) = c("r", "rˆ2")
 for(i in 1:NCOL(res_modL1)){
-# Test per autocorrelazione seriale
+# Verifico se c'è ancora traccia di autocorrelazione
 pval[1,i] = Box.test(res_modL1[,i], lag=12, type="Ljung")$p.val
-# Test per effetti ARCH (eteroschedasticità)
+# Controllo se la varianza cambia nel tempo (volatilità tipica dei dati economici)
 pval[2,i] = Box.test(res_modL1[,i]^2, lag=12, type="Ljung")$p.val
 }
 round(pval, 4)
@@ -614,9 +614,9 @@ pval = matrix(NA, 2, NCOL(res_modL1))
 colnames(pval) = colnames(res_modL1)
 rownames(pval) = c("r", "rˆ2")
 for(i in 1:NCOL(res_modL1)){
-# Test per autocorrelazione seriale
+# Verifico se c'è ancora traccia di autocorrelazione
 pval[1,i] = Box.test(res_modL2[,i], lag=12, type="Ljung")$p.val
-# Test per effetti ARCH (eteroschedasticità)
+# Controllo se la varianza cambia nel tempo (volatilità tipica dei dati economici)
 pval[2,i] = Box.test(res_modL2[,i]^2, lag=12, type="Ljung")$p.val
 }
 round(pval, 4)
@@ -635,12 +635,12 @@ Il nostro modello $\text{VAR}(2)$ è ben specificato per la media (cattura tutta
 Si continua l’analisi del $\text{VAR}(2)$ con i test multivariati standard per la stabilità, la normalità e l’autocorrelazione seriale.
 
 ```{r}
-# Test di Stabilità (Radici)
+# Calcolo le radici del VAR per capire se il sistema è stabile e non 'esplode'
 roots(modL2)
 ```
 
 ```{r}
-# Test di Normalità Multivariata (Jarque-Bera)
+# Controllo se i residui si distribuiscono come una normale (spesso non succede in finanza/macro)
 normality.test(modL2)
 ```
 
@@ -649,13 +649,13 @@ normality.test(modL2)
 -   **Normalità:** Il test di Jarque-Bera multivariato rifiuta nettamente l’ipotesi nulla di normalità dei residui ( $p$-value \< $2.2e-16$). L’output mostra che questo rifiuto è dovuto sia alla presenza di asimmetria (Skewness) sia, e soprattutto, a un eccesso di curtosi (Kurtosis). Questo risultato è molto comune nei dati macroeconomici ed è coerente con quanto già visto nel test sui residui al quadrato ( $r^2$ ), che indicava la presenza di eteroschedasticità.
 
 ```{r}
-# Test per Autocorrelazione Seriale (Multivariato)
-# Test Ljung-Box multivariato (Portmanteau)
+# Testo l'autocorrelazione su tutte le equazioni contemporaneamente
+# Faccio girare la versione multivariata del Ljung-Box (Portmanteau)
 serial.test(modL2, lags.pt=16, type = "PT.asymptotic")
 ```
 
 ```{r}
-# Test Breusch-Godfrey (LM Test)
+# Per sicurezza provo anche il test di Breusch-Godfrey
 serial.test(modL1, lags.bg = 16, type = "BG")
 ```
 
@@ -680,7 +680,7 @@ Eseguiamo ora i test di Causalità di Granger per verificare se i ritardi passat
 $$H_0: \text{I ritardi della variabile "cause" NON migliorano la previsione delle altre variabili}$$
 
 ```{r}
-# Test di sistema (una variabile vs. tutte le altre)
+# Voglio capire se una singola variabile è in grado di prevedere l'intero blocco delle altre
 causality(modL2, cause="Prod")
 causality(modL2, cause="Occ")
 causality(modL2, cause="Redd")
@@ -706,12 +706,12 @@ Mentre il test *causality()* precedente era di sistema (una variabile contro tut
 
 p = 2 # Numero di lag del modello scelto (modL2)
 
-# Test 1: Occupazione causa produzione?
-# H0: Occupazione NON causa la produzione
+# Provo a vedere se i posti di lavoro creati ieri mi aiutano a prevedere la produzione di oggi
+# Ipotesi di partenza: l'Occupazione non serve a prevedere la Produzione
 grangertest(df[, "Prod"] ~ df[, "Occ"], order = p)
 
-# Test 2: La produzione causa occupazione?
-# H0: Produzione NON causa occupazione
+# E al contrario? Le fabbriche che producono di più oggi porteranno ad assumere domani?
+# Ipotesi di partenza: la Produzione non serve a prevedere il Reddito
 grangertest(df[, "Occ"] ~ df[, "Prod"], order = p)
 ```
 
@@ -726,12 +726,12 @@ Esiste una relazione bidirezionale. Questo nucleo "reale" dell'economia si auto-
 **Produzione industriale e reddito personale reale**
 
 ```{r}
-# Test 1:Il reddito causa produzione?
-# H0: Reddito NON causa la produzione
+# I soldi nelle tasche di ieri spingono le fabbriche a produrre di più oggi?
+# Ipotesi di partenza: il Reddito non serve a prevedere la Produzione
 grangertest(df[, "Prod"] ~ df[, "Redd"], order = p)
 
-# Test 2: La produzione causa reddito?
-# H0: Produzione NON causa occupazione
+# Le fabbriche a pieno regime oggi portano a buste paga più gonfie domani?
+# Ipotesi di partenza: la Produzione non serve a prevedere il Reddito
 grangertest(df[, "Redd"] ~ df[, "Prod"], order = p)
 ```
 
@@ -746,12 +746,12 @@ La relazione è prevalentemente unidirezionale, è l'attività industriale a gen
 **Occupazione non agricola e reddito personale reale**
 
 ```{r}
-# Test 1: Il reddito causa reddito?
-# H0: reddito NON causa l'occupazione
+# Il reddito di ieri mi fa capire quanti assunti ci saranno oggi?
+# Ipotesi di partenza: il Reddito non serve a prevedere l'Occupazione
 grangertest(df[, "Occ"] ~ df[, "Redd"], order = p)
 
-# Test 2: Occupazione causa reddito?
-# H0: Il occupazione causa il reddito
+# O forse sono i nuovi contratti di oggi a riempire i portafogli di domani?
+# Ipotesi di partenza: l'Occupazione non serve a prevedere il Reddito
 grangertest(df[, "Redd"] ~ df[, "Occ"], order = p)
 ```
 
@@ -884,7 +884,7 @@ ccf(beta, alfa, lag.max = 10, main = "CCF(beta, alfa)")
 
 Dall’analisi della funzione di cross-correlazione tra i residui pre-sbiancati emerge un chiaro picco al lag $0$, che identifica $b=0$. Il successivo decadimento dei coefficienti suggerisce una componente inerziale nel processo di trasferimento, portando all’identificazione di un termine al denominatore ($r=1$). La mancanza di ulteriori picchi significativi nei lag positivi immediati permette di impostare il numeratore a $s=0$. Questa struttura ($0,0,1$) descrive un sistema in cui le variazioni dell'occupazione hanno un impatto immediato sulla produzione, i cui effetti persistono parzialmente nel tempo prima di esaurirsi.
 
-### Stima del modello
+### Provo ad adattare un modello ARMA per pulire la serie
 
 ```{r,fig.height=5,fig.width=9,dpi=300,fig.cap="Funzione di cross-correlazione tra serie dei residui del primo modello stimato e l'input."}
 # MTS::tfm1(y, x, orderN = c(p,d,q), orderX = c(r,s,b))
