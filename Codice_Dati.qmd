@@ -1,0 +1,50 @@
+---
+title: "Untitled"
+format: pdf
+editor: visual
+---
+
+## Dati
+
+Come prima cosa carico tutte le librerie necessarie per le analisi e le funzioni che verranno utilizzate all'interno del report
+
+```{r,warning=FALSE,results='hide',message=FALSE}
+library(fredr)
+library(tidyverse)
+library(lubridate)
+library(writexl)
+
+# Funzione per scaricare le serie
+scarica_serie = function(codice, nome_locale) {
+  fredr(
+    series_id = codice,
+    observation_start = as.Date("1980-01-01")
+  ) %>%
+    dplyr::select(date, value) %>%
+    rename(!!nome_locale := value)
+}
+
+```
+
+```{r,warning=FALSE}
+fredr_set_key("9eee0c9287f7b0617713617ea49884a6")
+
+# Codice e nome delle serie da analizzare
+codice_serie = list(
+  INDPRO   = "Indice prod",
+  PAYEMS  = "Occ. no agri",
+  W875RX1  = "Redditto personale"
+)
+
+# Costruzione del data.frame
+df = NULL
+for (codice in names(codice_serie)) {
+  nome_locale = codice_serie[[codice]]
+  serie = scarica_serie(codice, nome_locale)
+  df = if (is.null(df)) serie else full_join(df, serie, by = "date")
+}
+
+Serie = ts(na.omit(df[,-1]), start = c(1980,1), frequency = 12)
+tail(Serie)
+write_xlsx(data.frame(Serie),path = "dati_report.xlsx")
+```

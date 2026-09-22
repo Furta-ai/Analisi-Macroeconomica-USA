@@ -1,0 +1,1538 @@
+---
+title: "Report Modelli Statistici per Dati Economici"
+author: "Riccardo Forte - Matricola: 2160531"
+format: pdf
+editor: visual
+toc: true
+include-in-header:
+      text: |
+        \usepackage{booktabs}
+        \usepackage{amsmath}
+        \usepackage{makecell}
+        \usepackage{caption}
+        \usepackage{placeins}
+        \let\oldtoc\tableofcontents
+        \renewcommand{\tableofcontents}{\oldtoc\newpage\mbox{}\thispagestyle{empty}}
+---
+
+## Introduzione
+
+In questo elaborato si andrà a considerare tre serie storiche mensili scaricate dal database "FRED":
+
+-   **INDPRO (Industrial Production Index):** L'indice della produzione industriale misura l'output reale dei settori manifatturiero, minerario e dei servizi di pubblica utilità (gas ed elettricità). Rappresenta una misura tempestiva della componente più ciclica dell'economia, fornendo un segnale immediato sulle fasi di espansione o contrazione dell'attività fisica produttiva.
+
+-   **PAYEMS (All Employees, Total Nonfarm):** Questa serie rappresenta il numero totale di dipendenti nel settore non agricolo. È la misura di riferimento per la salute del mercato del lavoro statunitense. Essendo una variabile di stock (numero di posti di lavoro esistenti), riflette come le decisioni delle imprese si adattino all'andamento della domanda e della produzione.
+
+<!-- -->
+
+-   **W875RX1 (Real personal income excluding current transfer receipts):** Questa serie misura il reddito personale reale al netto dei trasferimenti governativi (come sussidi o pensioni). È considerata una delle migliori proxy mensili del PIL, poiché riflette la capacità di spesa generata direttamente dall'attività produttiva e dal mercato del lavoro, depurata dalle componenti transitorie della politica fiscale.
+
+Le serie considerate delineano il nucleo della trasmissione macroeconomica tra produzione, reddito e occupazione. Esse sono legate da relazioni di feedback fondamentali: un incremento della produzione industriale (**INDPRO**) richiede solitamente un aumento dell'input di lavoro (**PAYEMS**), il quale a sua volta genera reddito reale per le famiglie (**W875RX1**), sostenendo la domanda aggregata. In econometria, queste variabili sono spesso analizzate congiuntamente poiché tendono a muoversi in sincronia durante il ciclo economico, sebbene con velocità di aggiustamento differenti. Mentre la produzione industriale reagisce rapidamente agli shock, l'occupazione tende a mostrare una maggiore persistenza (o ritardo), a causa dei costi di assunzione e licenziamento.
+
+## Dati
+
+Come prima cosa carico tutte le librerie necessarie per le analisi e le funzioni che verranno utilizzate all'interno del report.
+
+```{r,warning=FALSE,results='hide',message=FALSE}
+library(forecast)
+library(urca)
+library(vars)
+library(dynlm)
+source("Funzioni.lib")
+```
+
+Carico i dati
+
+```{r,warning=FALSE}
+dati = readxl::read_xlsx("dati_report.xlsx")
+Serie = ts(dati, start = c(1980,1), frequency = 12)
+colnames(Serie) = c("Prod", "Occ", "Redd")
+tail(Serie)
+```
+
+## Analisi esplorative
+
+L'analisi dei grafici delle serie storiche possono essere d'aiuto per l'individuazione di trend e pattern particolari nel tempo.
+
+### Grafici serie storiche
+
+```{r,fig.width=10,fig.height=7,dpi=300,fig.align='center',fig.cap="Grafici delle serie storiche: Produzione Industriale, occupazione non agricola, Reddito Reale Personale."}
+plot.ts(Serie)
+```
+
+Le serie storiche presentano tutte e tre un chiaro trend crescente nel lungo periodo, ma mostrano differenze sostanziali nella loro reattività ai cicli economici:
+
+-   **Produzione Industriale (INDPRO):** La serie mostra il comportamento più ciclico e volatile del sistema. Presenta contrazioni marcate in corrispondenza di ogni recessione economica, con cadute particolarmente evidenti durante la crisi finanziaria del 2008 e la pandemia del 2020. È evidente come la produzione industriale sia la variabile che reagisce con maggior reattività ed intensità ai cambiamenti economici.
+
+-   **Occupazione Non Agricola (PAYEMS):** La serie dell'occupazione presenta un trend molto più persistente e meno variabile rispetto alla produzione, ma con una caratteristica dinamica di ritardo. Durante le recessioni (2001, 2008), i cali sono profondi ma più graduali, mentre il recupero post-crisi tende a essere più lento. Lo shock del 2020 appare unico nella serie per la sua verticalità, riflettendo la natura esogena del lockdown, seguita da una fase di crescita quasi costante.
+
+-   **Reddito Personale Reale (W875RX1):** Questa serie mostra la crescita più regolare e monotona, riflettendo una componente strutturale di lungo periodo molto forte. Pur risentendo delle recessioni, le sue fluttuazioni sono meno ampie rispetto alla produzione industriale. Dopo lo shock pandemico si è registrata una crescita più rapida rispetto alle altre due serie.
+
+Tutte e tre le serie mostrano chiari segnali di non stazionarietà, caratterizzate da trend deterministici o stocastici che richiedono una verifica formale tramite correlogrammi e test di Dickey-Fuller (ADF). Data la natura macroeconomica dei dati e la presenza di trend che appaiono esponenziali nel lungo periodo, l’applicazione della trasformazione logaritmica risulta fondamentale. Questa operazione permetterà di linearizzare le tendenze, stabilizzare la varianza e, in seguito alla differenziazione, interpretare i dati in termini di tassi di crescita mensili, facilitando l'analisi delle interdipendenze dinamiche dei modelli $\text{VAR}$ e $\text{VECM}$.
+
+```{r,fig.width=10,fig.height=7,dpi=300,fig.align='center',fig.cap="Grafici della trasformata logaritmica delle serie storiche: Produzione Industriale, occupazione non agricola, Reddito Reale Personale."}
+Log.Serie = log(Serie)
+plot.ts(Serie)
+```
+
+```{r,fig.width=10,fig.height=7,dpi=300,fig.align='center',fig.cap="Grafici della trasformata logaritmica delle serie storiche solo all'interno dell'insieme di stima."}
+# Suddivisione in insieme di stima e verifica
+stima = window(Log.Serie, end = c(2021, 6))
+test = window(Log.Serie, start = c(2021, 7))
+plot.ts(stima)
+```
+
+### Correlogrammi
+
+```{r,fig.width=11,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi della serie storica: Produzione Industriale."}
+par(mfrow=c(1,2))
+acf(stima[,1],main="Produzione Industriale")
+pacf(stima[,1],main="Produzione Industriale")
+```
+
+```{r,fig.width=10,fig.height=6,dpi=400,fig.align='center',fig.cap="Correlogrammi delle serie storiche: Occupazione Non Agricola e Reddito Personale Reale."}
+par(mfrow=c(2,2))
+acf(stima[,2],main="Occupazione Non Agricola")
+pacf(stima[,2],main="Occupazione Non Agricola")
+acf(stima[,3],main="Reddito Personale Reale")
+pacf(stima[,3],main="Reddito Personale Reale")
+```
+
+Tutte e tre le funzioni di autocorrelazione globale (ACF) decrescono molto lentamente indice che non sono stazionarie, mentre le funzioni di autocorrelazione parziale (PACF) hanno un picco molto forte al lag 1.
+
+### Test di Dickey-Fuller Aumentato (ADF)
+
+Utilizzando il test della radice unitaria di Dickey-Fuller aumentato (ur.df) si testa l'ipotesi di presenza di una radice unitaria evidenziata nei correlogrammi e grafici delle serie storiche.
+
+La procedura prevede di analizzare una serie alla volta seguendo un approccio sequenziale, prima con trend e costante, poi solo con drift (costante), e infine senza termini deterministici se necessario.
+
+Per i seguenti test si utilizzarà un livello di significatività pari a $0.05$ e si selezioneranno i lag ottimali col criterio BIC, ottenendo la seguente equazione: $$
+\Delta y_{t-1} = \alpha + \gamma t + \delta y_{t-1} + \sum^p_{j=1} \beta_j \Delta y_{t-j} + \varepsilon_t
+$$
+
+#### Produzione Industriale
+
+```{r}
+# --- Passo 1: Modello con Trend e Costante ---
+test_prod_trend = ur.df(stima[,1], type="trend",
+                       selectlags = "BIC",lags = 12)
+summary(test_prod_trend)
+```
+
+Per la produzione industriale (in logaritmi) è stato effettuato un test di Dickey-Fuller aumentato includendo all’inizio sia il trend che il drift. Dato che si hanno dati mensili si è deciso di includere anche i ritardi delle differenze prime selezionandoli con una procedura che valuta il criterio di informazione BIC.
+
+Da questo primo test si nota che:
+
+-   **tau3:** il valore della statistica ($-1.0327$) è maggiore del valore critico al $5\%$ ($-3.42$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria ($H_0: \delta = 0$).
+
+-   **phi2:** il valore ($2.8827$) è minore del valore critico ($4.71$), quindi non si rifiuta l’ipotesi nulla che il drift e il trend temporale siano nulli in presenza di una radice unitaria ($H_0: \delta = \gamma = \alpha = 0$).
+
+-   **phi3:** il valore ($1.38$) è minore del valore critico ($6.30$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria e assenza del trend temporale ($H_0: \delta = \gamma =0$)
+
+Dato che il trend non è significativamente diverso da 0 (phi3), lo rimuoviamo e proseguiamo utilizzando il test di Dickey-Fuller aumentato includendo il solo drift per confermare che non sia presente anche il trend:
+
+```{r}
+# --- Passo 2: Modello con Drift ---
+test_prod_drift = ur.df(stima[,1], type="drift",lags=12,selectlags = "BIC")
+summary(test_prod_drift)
+```
+
+Utilizzando il test di Dickey-Fuller aumentato includendo il solo drift (costante), osserviamo che:
+
+-   **tau2:** il valore ($-1.6545$) è maggiore del valore critico ($-2.87$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria.
+
+-   **phi1:** il valore ($4.9929$) è maggiore del valore critico ($4.61$), quindi si rifiuta l’ipotesi nulla di presenza di una radice unitaria e assenza del trend temporale.
+
+Essendo il test phi1 significativo e avendo accettato la presenza di radice unitaria (tau2), possiamo concludere che il drift è significativo. Pertanto, la serie della produzione industriale in logaritmi presenta una radice unitaria con drift (è un Random Walk con Drift).
+
+#### Occupazione Non Agricola
+
+```{r}
+# --- Passo 1: Modello con Trend e Costante ---
+test_occ_trend = ur.df(stima[,2],type="trend",selectlags = "BIC",lags = 12)
+summary(test_occ_trend)
+```
+
+Per l'occupazione non agricola (in logaritmi) è stato effettuato un test di Dickey-Fuller aumentato includendo all’inizio sia il trend che il drift. Dato che si hanno dati mensili si è deciso di includere anche i ritardi delle differenze prime selezionandoli con una procedura che valuta il criterio di informazione BIC.
+
+Da questo primo test si nota che:
+
+-   **tau3:** il valore della statistica ($-1.3582$) è maggiore del valore critico al 5% ($-3.42$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria ($H_0: \delta = 0$).
+
+-   **phi2:** il valore ($4.8452$) è maggiore del valore critico ($4.71$), quindi si rifiuta l’ipotesi nulla che il drift e il trend temporale siano nulli in presenza di una radice unitaria.
+
+-   **phi3:** il valore ($1.9519$) è minore del valore critico ($6.30$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria e assenza del trend temporale.
+
+Dato che il trend non è significativamente diverso da 0 (phi3), lo rimuoviamo e proseguiamo utilizzando il test di Dickey-Fuller aumentato includendo il solo drift per confermare che non sia presente anche il trend:
+
+```{r}
+# --- Passo 2: Modello con Drift ---
+test_occ_drift = ur.df(stima[,2], type="drift",lags=12,selectlags = "BIC")
+summary(test_occ_drift)
+```
+
+Utilizzando il test di Dickey-Fuller aumentato includendo il solo drift (costante), osserviamo che:
+
+-   **tau2:** il valore ($-1.7864$) è maggiore del valore critico ($-2.87$), quindi non rifiuto l’ipotesi nulla di presenza di una radice unitaria.
+
+-   **phi1:** il valore ($6.9147$) è maggiore del valore critico ($4.61$), quindi si rifiuta l’ipotesi nulla di presenza di una radice unitaria e assenza del trend temporale.
+
+Essendo il test phi1 significativo e avendo accettato la presenza di radice unitaria (tau2), possiamo concludere che il drift è significativo. Pertanto, la serie dell'occupazione in logaritmi presenta una radice unitaria con drift.
+
+#### Reddito Personale Reale
+
+```{r}
+# --- Passo 1: Modello con Trend e Costante ---
+test_redd_trend = ur.df(stima[,3],type="trend",selectlags = "BIC",lags = 12)
+summary(test_redd_trend)
+```
+
+Per i Reddito Personale Reale (in logaritmi) è stato effettuato un test di Dickey-Fuller aumentato includendo all’inizio sia il trend che il drift. Dato che si hanno dati mensili si è deciso di includere anche i ritardi delle differenze prime selezionandoli con una procedura che valuta il criterio di informazione BIC.
+
+Da questo primo test si nota che:
+
+-   **tau3:** il valore della statistica ($-1.8097$) è maggiore del valore critico al 5% ($-3.42$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria ($H_0: \delta = 0$).
+
+-   **phi2:** il valore ($16.4318$) è maggiore del valore critico ($4.71$), quindi si rifiuta l’ipotesi nulla che il drift e il trend temporale siano nulli in presenza di una radice unitaria.
+
+-   **phi3:** il valore ($1.9119$) è minore del valore critico ($6.30$), quindi non si rifiuta l’ipotesi nulla di presenza di una radice unitaria e assenza del trend temporale.
+
+Dato che il trend non è significativamente diverso da 0 (phi3), lo rimuoviamo e proseguiamo utilizzando il test di Dickey-Fuller aumentato includendo il solo drift.
+
+```{r}
+# --- Passo 2: Modello con Drift ---
+test_redd_drift = ur.df(stima[,3], type="drift",lags=12,selectlags = "BIC")
+summary(test_redd_drift)
+```
+
+Utilizzando il test di Dickey-Fuller aumentato includendo il solo drift (costante), osserviamo che:
+
+-   **tau2:** il valore ($-1.0072$) è maggiore del valore critico ($-2.87$), quindi non rifiuto l’ipotesi nulla di presenza di una radice unitaria.
+
+-   **phi1:** il valore ($23.1581$) è maggiore del valore critico ($4.61$), quindi si rifiuta l’ipotesi nulla di presenza di una radice unitaria e assenza del drift.
+
+Essendo il test phi1 significativo e avendo accettato la presenza di radice unitaria (tau2), possiamo concludere che il drift è significativo. Pertanto, la serie del reddito in logaritmi presenta una radice unitaria con drift (è un Random Walk con Drift).
+
+#### Analisi differenze prime
+
+Per concludere la fase di test e confermare definitivamente che possiamo trattare le serie come $I(1)$ (cioè stazionarie una volta differenziate), si esegue il test ADF sulle differenze prime di tutte e tre le variabili.
+
+```{r}
+# --- Verifica sulle Differenze Prime (per confermare I(1)) ---
+# Produzione Industriale (Differenze)
+summary(ur.df(diff(stima[,1]), type="drift", lags=12, selectlags = "BIC"))
+# Occupazione non agricola (Differenze)
+summary(ur.df(diff(stima[,2]), type="drift", lags=12, selectlags = "BIC"))
+# Reddito Reale Personale (Differenze)
+summary(ur.df(diff(stima[,3]), type="drift", lags=12, selectlags = "BIC"))
+```
+
+I test sulle differenze prime mostrano un rifiuto di $H_0$. Poiché per tutte le variabili non abbiamo rifiutato la presenza di radice unitaria sui livelli, ma abbiamo rifiutato la radice unitaria sulle differenze prime, concludiamo che produzione industriale, occupazione non agricola e reddito personale sono processi integrati di ordine 1, ovvero $I(1)$. Quindi è possibile procedere con l’analisi di cointegrazione.
+
+## $\text{VECM}$ (Vector Error Correction Model)
+
+### Test di Johansen
+
+Prima di stimare il $\text{VECM}$ si va a determinare il rango di cointegrazione (massimo due vettori di integrazione visto che si hanno solo tre serie), se esiste almeno un vettore di cointegrazione ha senso andare a stimare un $\text{VECM}$.
+
+```{r,warning=FALSE}
+# 1. Selezione del numero di ritardi (Lag Length)
+lag_select = VARselect(stima, lag.max = 12, type = "both")
+print(lag_select$selection)
+
+K_opt = lag_select$selection['SC(n)']
+```
+
+Si seleziona il valore tramite il criterio d'informazione BIC in quanto il più robusto e risulta la soluzione più parsimoniosa.
+
+Per determinare il numero di relazioni di cointegrazione ($r$), si adotta la procedura di Johansen con la specifica ecdet = "const". Tale scelta è supportata dai risultati dei test ADF precedentemente condotti, i quali hanno escluso la presenza di trend deterministici significativi nelle serie in livelli (test phi3 non significativo), confermando invece la presenza di componenti di drift (test phi1 significativo), inoltre le differenze delle serie storiche riscalate non evidenziano trend crescenti o descrescenti evidenti.
+
+```{r,fig.height=8,fig.width=10,fig.cap="Grafici delle differenze tra le serie riscalate"}
+Stima.scale = scale(stima)
+par(mfrow=c(3,1))
+plot.ts(Stima.scale[,1]-Stima.scale[,2],main="Differenza tra prod e occ")
+plot.ts(Stima.scale[,1]-Stima.scale[,3],ylab="Differenza tra prod e redd")
+plot.ts(Stima.scale[,2]-Stima.scale[,3],ylab="Differenza tra occu e redd")
+```
+
+Si assume pertanto che le serie presentino trend lineari stocastici che si annullano nella relazione di cointegrazione, lasciando un equilibrio di lungo periodo stazionario attorno a una costante.
+
+#### Test della Traccia
+
+```{r}
+# Test di Cointegrazione (Trace Test)
+vecm_jo = ca.jo(stima, type = "trace", ecdet = "const",
+                 K = K_opt, spec = "longrun")
+summary(vecm_jo)
+```
+
+Verifichiamo sequenzialmente le ipotesi nulle:
+
+-   $H_0$: $r=0 \rightarrow$ La statistica test è $59.55$, nettamente maggiore al valore critico al $5\% \; (42.44)$, quindi si rifiuta $H_0$.
+-   $H_0$: $r \leq 1 \rightarrow$ La statistica test è $8.13$, nettamente inferiore al valore critico al $5\% \; (19.96)$, quindi non si rifiuta $H_0$.
+-   $H_0$: $r \leq 2 \rightarrow$ La statistica test è $1.65$, nettamente inferiore al valore critico al $5\% \; (9.24)$, quindi non si rifiuta $H_0$.
+
+#### Test dell'Autovalore Massimo (Max Eigenvalue)
+
+```{r}
+vecm_eigen = ca.jo(stima, type = "eigen", ecdet = "const",
+                    K = K_opt, spec = "longrun")
+summary(vecm_eigen)
+```
+
+```{r,fig.height=5,fig.width=11,dpi=300,fig.cap="Grafici e correlogrammi dei residui del VAR ausiliario per i test di Johansen."}
+plotres(vecm_jo)
+```
+
+Verifichiamo sequenzialmente le ipotesi nulle:
+
+-   $H_0$: $r=0 \rightarrow$ La statistica test è $51.41$, nettamente superiore al valore critico al $5\% \; (22)$, quindi si rifiuta $H_0$.
+-   $H_0$: $r \leq 1 \rightarrow$ La statistica test è $6.48$, inferiore al valore critico al $5\% \; (15.67)$, quindi non si rifiuta $H_0$.
+-   $H_0$: $r \leq 2 \rightarrow$ La statistica test è $1.65$, nettamente inferiore al valore critico al $5\% \; (9.24)$, quindi non si rifiuta $H_0$.
+
+Entrambi i test indicano concordemente che il rango di cointegrazione è $r = 1$. Esiste quindi un vettore di cointegrazione (una relazione di equilibrio di lungo periodo) che lega le variabili considerate. Questo risultato implica che le variabili condividono un trend stocastico comune che le mantengono legate nel lungo termine, nonostante le deviazioni di breve periodo.
+
+### Vettore di Cointegrazione (VECM)
+
+Si normalizza per la prima variabile, la produzione industriale.
+
+#### Relazioni di Lungo Periodo (Matrice $\beta$)
+
+```{r}
+# Si stima il VECM ristretto con rango r = 1
+vecm_rls = cajorls(vecm_jo, r = 1)
+# Si mostra i coefficienti delle relazioni di lungo periodo (Beta)
+print(round(vecm_rls$beta,2))
+```
+
+L’output mostra la relazione di equilibrio :
+
+-   Relazione (Normalizzata sulla produzione industriale): $$ \ln(\text{Prod}) = -16.22 - 0.02 \text{ ln(Redd)} + 1.76 \text{ ln(Occ)} $$
+
+La relazione di lungo periodo mostra che la produzione industriale è legata positivamente all'occupazione (elasticità di $1.76$): un aumento dell'1% dell'occupazione è associato a un aumento dell'1.76% della produzione nel lungo periodo. Il reddito, curiosamente, ha un segno negativo quasi nullo ($-0.02$), suggerendo che, una volta controllata l'occupazione, il reddito non aggiunge informazione strutturale alla capacità produttiva.
+
+#### Coefficienti di Aggiustamento (Matrice $\alpha$)
+
+```{r}
+# Coefficienti di aggiustamento (Alpha / Loading Matrix)
+print(vecm_rls$rlm$coefficients[grep("ect",
+                                     rownames(vecm_rls$rlm$coefficients)), ])
+```
+
+I coefficienti di aggiustamento ($\alpha$) risultano estremamente bassi per tutte le variabili. In particolare:
+
+-   **Produzione e Occupazione:** Con valori vicini allo zero e segni positivi, queste variabili non sembrano correggere gli squilibri di breve periodo. Questo suggerisce che siano variabili "guida" (esogene nel lungo periodo) che non si adattano agli errori del sistema.
+
+-   **Reddito:** Sebbene sia il valore più alto ($0.009$), rimane comunque troppo contenuto per indicare un riassorbimento rapido.
+
+I coefficienti $\alpha$ non presentano il segno atteso per il riequilibrio, suggerendo che le variabili si muovano insieme spinte da trend comuni piuttosto che da una reazione dinamica agli scostamenti dall'equilibrio. Questo fenomeno è spesso associato a variabili debolmente esogene o a sistemi dove il riequilibrio richiede tempi molto lunghi, superiori alla frequenza mensile dei dati.
+
+In sintesi, sebbene il test di Johansen identifichi una relazione di cointegrazione ($r=1$), l'assenza di coefficienti di aggiustamento $\alpha$ significativi (o con il segno atteso) indica che il meccanismo di correzione dell'errore è quasi inesistente o estremamente lento. Alla luce di questa evidenza, si è ritenuto non necessario procedere con la metodologia alternativa di Engle-Granger. Sebbene tale procedura permetta di stimare il vettore di cointegrazione tramite OLS minimizzando la varianza residua, la debolezza strutturale dei parametri di aggiustamento emersa nel test di Johansen suggerisce che anche un modello ECM basato sui residui OLS mostrerebbe una scarsa capacità di riequilibrio. Questo conferma che, pur non divergendo nel lunghissimo periodo, la dinamica mensile delle serie è dominata da shock stocastici di breve termine. Pertanto, per catturare correttamente le interdipendenze cicliche e produrre previsioni accurate, risulta metodologicamente preferibile procedere con un modello $\text{VAR}$ in differenze prime.
+
+## Trasformazione: Tassi di Crescita (Differenze Logaritmiche)
+
+Per affrontare la non stazionarietà (trend) osservata nei dati in livelli, si applica una trasformazione in differenze logaritmiche. Questo permette di analizzare i tassi di crescita mensili approssimati, che dovrebbero essere stazionari.
+
+```{r,fig.width=10,fig.height=7,dpi=300,fig.align='center',fig.cap="Grafici dei tassi di crescita approssimati: Produzione Industriale, Occupazione Non Agricola e Reddito Personale Reale"}
+# Trasformazione dell'intero insieme dei dati
+dati_trasf = diff(Log.Serie)*100
+
+# Calcola le differenze logaritmiche (tassi di crescita)
+df = diff(stima) * 100
+# --- Grafico delle serie ---
+plot.ts(df)
+```
+
+## Cross-correlazioni (CCF)
+
+### Pulizia autocorrelazione nelle serie storiche
+
+Prima di rappresentare le funzioni di cross-correlazione è opportuno pulire le serie storiche dall'autocorellazione, se presente, applicando un modello $\text{ARMA(p,q)}$. In questo caso esaminando i vari correlogrammi per ottenere serie prive di correlazione seriale ha senso partire dalle serie differenziate e valutare i correlogrammi per riconoscere pattern autoregressivi e/o a media mobile.
+
+#### Produzione Industriale
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Grafico della serie storica differenziata: Produzione Industriale"}
+plot.ts(df[,1],ylab="Produzione Industriale")
+```
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi della serie storica differenziata: Produzione Industriale"}
+par(mfrow=c(1,2))
+acf(df[,1],main="Produzione Industriale",na.action=na.pass)
+pacf(df[,1],main="Produzione Industriale",na.action=na.pass)
+Box.test(df[,1],24,type="Ljung")
+```
+
+Dall'analisi dei correlogrammi e dal test di Ljung-Box è evidente che non basta la differenziazione per sbiancare la serie della produzione industriale. Quindi è necessario utilizzare un opportuno modello $\text{ARMA(p,q)}$
+
+Dalla funzione di autocorrelazione globale della serie dei tassi ha senso proporre un $\text{MA(1)}$ o un $\text{AR(1)}$.
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi dei residui di un MA(1) applicato alla serie differenziata: Produzione Industriale"}
+# Stima del modello
+fit.p.prod = arima(na.omit(df[,1]),
+                   order = c(0,0,1))
+fit.p.prod1 = arima(na.omit(df[,1]),
+                   order = c(1,0,0))
+
+# Confronto BIC
+BIC(fit.p.prod)
+BIC(fit.p.prod1)
+
+#Correlogrammi
+par(mfrow=c(1,2))
+acf(fit.p.prod$residuals,main="Residui MA(1) - Produzione Industriale")
+pacf(fit.p.prod$residuals,main="Residui MA(1) - Produzione Industriale")
+# Controllo stazionarietà ed invertibilità
+check_stationarity_invertibility(fit.p.prod)
+# Test di significatività dei coefficienti stimati
+significativita_arima(fit.p.prod)
+# Test Ljung-Box per correlazione seriale residui
+Box.test(fit.p.prod$residuals,24,type="Ljung",fitdf=1)
+CCF_prod = fit.p.prod$residuals
+```
+
+Il parametro $\text{MA}$ risulta significativo ed essendo minore di $1$ si ha che il modello è anche invertibile (essendo un $\text{MA}$ è sempre stazionario).
+
+Il test di Ljung-Box conferma l'assenza di correlazione seriale nei residui del modello, quindi il modello riesce a catturare la dinamica lineare rimasta all'interno della serie storica diffenziata.
+
+#### Occupazione Non Agricola
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Grafico della serie storica differenziata: Occupazione Non Agricola"}
+plot.ts(df[,2],ylab="Occupazione Non Agricola")
+```
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi della serie storica differenziata: Occupazione Non Agricola"}
+par(mfrow=c(1,2))
+acf(df[,2],main="Occupazione Non Agricola",na.action=na.pass)
+pacf(df[,2],main="Occupazione Non Agricola",na.action=na.pass)
+Box.test(df[,2],24,type="Ljung")
+```
+
+Il test di Ljung-Box non mette in luce evidenza di correlazione seriale all'interno della serie differenziata in quanto non si rifiuta l'ipotesi nulla di incorrelazione seriale
+
+```{r}
+CCF_occ = df[,2]
+```
+
+#### Reddito Personale Reale
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Grafico della serie storica differenziata: Reddito Personale Reale"}
+plot.ts(df[,3],ylab="Reddito Personale Reale")
+```
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi della serie storica differenziata: Reddito Personale Reale"}
+par(mfrow=c(1,2))
+acf(df[,3],main="Reddito Personale Reale",na.action=na.pass)
+pacf(df[,3],main="Reddito Personale Reale",na.action=na.pass)
+Box.test(df[,3],24,type="Ljung")
+CCF_redd =df[,3]
+```
+
+La serie differenziata non presenta nessun tipo di correlazione come si può notare dai correlogrammi e il test di Ljung-Box lo conferma. Quindi per questa serie non è necessario filtrarla attraverso un modello $\text{ARMA(q,p)}$.
+
+### Grafici cross-correlazioni
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Cross-correlazione tra le serie storiche: Produzione Industriale e Occupazione Non Agricola"}
+ccf(CCF_prod,CCF_occ,
+    main = "CCF (Produzione Industriale, Occupazione Non Agricola)",
+    na.action = na.pass)
+```
+
+Dalla funzione di cross-correlazione tra produzione industriale e occupazione emerge una correlazione simultanea statisticamente significativa. Si osserva anche una correlazione significativa al primo ritardo negativo, indicando che variazioni della produzione industriale precedono quelle dell'occupazione non agricola.
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi delle serie storiche: Produzione Industriale e Reddito Personale Reale"}
+ccf(CCF_prod,CCF_redd,
+    main = "CCF (Produzione Industriale, Reddito Personale Reale)",
+    na.action = na.pass)
+```
+
+La funzione di cross-correlazione tra consumi produzione industriale e reddito personale reale mostra una correlazione simultanea significativa. Emergono due correlazioni leggermente significative a ritardi negativi e una ad un ritardo positivo.
+
+```{r,fig.width=10,fig.height=4,dpi=400,fig.align='center',fig.cap="Correlogrammi delle serie storiche: Occupazione Non Agricola e Reddito Personale Reale"}
+ccf(CCF_occ,CCF_redd,
+    main = "CCF (Occupazione Non Agricola, Reddito Personale Reale)",
+    na.action = na.pass)
+```
+
+Per quanto riguarda la funzione di cross-correlazione tra occupazione e reddito personale, emerge una correlazione simultanea forte e statisticamente significativa e una relazione unidirezionale dove il reddito personale guida l'occupazione in quanto è presente una correlazione significativa al primo ritardo.
+
+#### Possibile analisi economica delle cross-correlazioni
+
+L'analisi mostra che l’economia si muove come una catena ben sincronizzata, dove la produzione industriale è la forza trainante. Quando la produzione aumenta, l’occupazione non cresce immediatamente, ma con un leggero ritardo. Questo accade perché le aziende preferiscono essere sicure della ripresa prima di assumere nuovo personale. Una volta che l’occupazione inizia a salire, questa trascina con sé il reddito delle famiglie. Infine, si nota un effetto di "ritorno" dove il reddito più alto sostiene i consumi, che a loro volta spingono le imprese a produrre ancora di più. In sintesi, i dati confermano un percorso lineare mostrando che la crescita parte dalle fabbriche, si sposta sui posti di lavoro e arriva infine nelle tasche dei cittadini.
+
+## Selezione e Stima Modello $\text{VAR}$
+
+Per selezionare il numero di ritardi ($p$) del modello $\text{VAR}$, utilizziamo gli indici di informazione su un massimo di $12$ lag.
+
+```{r}
+ICsel = VARselect(df, lag.max = 12, type = "const")
+ICsel$selection
+```
+
+L’output della funzione VARselect mostra diversi valori di ritardi tra tutti i criteri di informazione. Si preferisce il modello più parsimonioso ed efficiente suggerito dai criteri, procedendo con la stima di un $\text{VAR}(1)$.
+
+### Stima del Modello $\text{VAR}(1)$
+
+In base ai risultati dei criteri di informazione si procede con la stima del modello $\text{VAR}(1)$.
+
+```{r}
+modL1 = vars::VAR(df, p = 1, type = "const")
+summary(modL1)
+```
+
+L’output del summary relativo al modello $\text{VAR}(1)$ con le variabili Prod (Produzione Industriale), Occ (Occupazione) e Redd (Reddito Personale Reale) fornisce le seguenti indicazioni macroeconomiche:
+
+-   **Stabilità del Sistema:** Le radici del polinomio caratteristico ($0.2176$, $0.1736$, $0.1736$) sono tutte ampiamente inferiori a $1$. Questo conferma che il sistema è stazionario e il modello è stabile: gli shock che colpiscono il sistema vengono riassorbiti molto rapidamente, senza mostrare una persistenza esplosiva nel lungo periodo.
+
+-   **Analisi delle Equazioni:**
+
+    -   **Eq. Prod (Produzione):** A differenza della stima precedente, la produzione attuale mostra ora una significativa inerzia interna (coeff. $0.343$, $p$-value $5.46e-07$). Restano invece confermati gli effetti delle altre serie: l'occupazione passata mantiene un impatto negativo ($-0.329$), riflettendo possibili aggiustamenti ciclici, mentre il reddito passato continua a influenzare positivamente la produzione ($0.205$), suggerendo che la domanda passata stimola l'attività industriale corrente.
+
+    -   **Eq. Occ (Occupazione):** Si conferma l'equazione con la maggiore significatività statistica. La produzione passata guida con forza l'occupazione (coeff. $0.273$, $p$-value $1.13e-08$), ribadendo il ruolo della produzione come traino per il mercato del lavoro. Anche il reddito passato contribuisce positivamente ($0.182$). Il coefficiente negativo del proprio lag ($-0.354$)) suggerisce una dinamica di "ritorno verso la media" o aggiustamento nei livelli occupazionali.
+
+    -   **Eq. Redd (Reddito)**: Il reddito è spiegato principalmente dalla produzione industriale passata (coeff. $0.208$, $p$-value $2.73e-05$) e dall'occupazione ($-0.201$). Come osservato in precedenza, il reddito non è influenzato dal proprio passato ($p$-value $0.119$), confermando che la ricchezza delle famiglie dipenda strettamente dai flussi reali correnti e passati (produzione e lavoro) piuttosto che da una propria persistenza stocastica.
+
+-   **Qualità del Fit (R-squared):** L'occupazione è la variabile meglio modellata ($R^2 \approx 10.1\%$), seguita dalla produzione ($R^2 \approx 8.4\%$) e dal reddito ($R^2 \approx 3.7\%$). Nonostante i valori possano apparire contenuti, i test F globali sono tutti altamente significativi, confermando la validità statistica della struttura VAR.
+
+-   **Residui e Correlazioni Contemporanee:** La matrice di correlazione dei residui evidenzia legami istantanei molto profondi, fondamentali per l'interpretazione macroeconomica:
+
+    -   **Correlazione (Prod, Occ) =** $0.7434$**:** Conferma una sincronia quasi totale tra decisioni produttive e variazioni dell'occupazione nello stesso periodo.
+
+    -   **Correlazione (Occ, Redd) =** $0.5086$**:** Il legame immediato tra mercato del lavoro e disponibilità economica è solido.
+
+    -   **Correlazione (Redd, Prod) =** $0.4703$**:** Esiste un legame contemporaneo moderato tra reddito e produzione.Le elevate correlazioni contemporanee indicano che gli shock macroeconomici colpiscono queste variabili quasi simultaneamente.
+
+    Data questa forte interconnessione, per l'analisi delle Impulse Response Functions (IRF) sarà indispensabile utilizzare una decomposizione di Cholesky. Questo permetterà di identificare correttamente la direzione degli impatti, isolando gli shock "puri" di una variabile dagli effetti riflessi dovuti alla correlazione istantanea con le altre.
+
+#### Residui $\text{VAR}(1)$
+
+```{r,fig.width=10,fig.height=7,dpi=400,fig.align='center',fig.cap="Grafici dei residui del modello VAR(1)"}
+res_modL1 = resid(modL1)
+plot.ts(res_modL1)
+```
+
+I grafici dei residui mostrano che sono centrati in zero e che sembra esserci eteroschedasticità, soprattutto per quanto riguarda i residui relativi al reddito.
+
+```{r,fig.width=10,fig.height=7,dpi=400,fig.align='center',fig.cap="Correlogrammi dei residui del modello VAR(1)"}
+par(mfrow = c(3, 2))
+for(i in 1:NCOL(res_modL1)){
+acf(res_modL1[,i], main = colnames(res_modL1)[i])
+pacf(res_modL1[,i], main = colnames(res_modL1)[i])
+}
+```
+
+I correlogrammi suggeriscono che potrebbe esserci dell'autocorrelazione seriale che non è stata catturata.
+
+Date le diagnosi esplorative dei residui del modello $\text{VAR}(1)$ si passa ai test formali.
+
+#### Diagnostica $\text{VAR}(1)$
+
+**Test Univariati sui Residui**
+
+Test di Ljung-Box
+
+```{r}
+pval = matrix(NA, 2, NCOL(res_modL1))
+colnames(pval) = colnames(res_modL1)
+rownames(pval) = c("r", "rˆ2")
+for(i in 1:NCOL(res_modL1)){
+# Test per autocorrelazione seriale
+pval[1,i] = Box.test(res_modL1[,i], lag=12, type="Ljung")$p.val
+# Test per effetti ARCH (eteroschedasticità)
+pval[2,i] = Box.test(res_modL1[,i]^2, lag=12, type="Ljung")$p.val
+}
+round(pval, 4)
+```
+
+Questo output fornisce i risultati del test formale per l'autocorrelazione e eteroschedasticità:
+
+-   **Autocorrelazione:** La prima riga testa l’ipotesi nulla di assenza di autocorrelazione seriale. Per i residui della serie storica della produzione industriale e dell'occupazione si rifiuta l'ipotesi nulla invece per quella del reddito si accetta con significatività dello $5\%$
+
+-   **Eteroschedasticità:** La seconda riga esegue lo stesso test sui residui al quadrato per verificare la presenza di effetti ARCH (eteroschedasticità). Qui i $p$-value sono molto bassi e statisticamente significativi per i residui della produzione e reddito, quindi si rifiuta l’ipotesi nulla di omoschedasticità. Invece per quelli dell'occupazione non si rifiuta l'ipotesi nulla di omoschedasticità.
+
+Il modello $\text{VAR}(1)$ non è ben specificato per la media (cattura tutta l’autocorrelazione), inoltre i suoi residui presentano eteroschedasticità (la varianza non è costante nel tempo). Quindi è opportuno aumentare l'ordine del modello.
+
+### Stima del Modello $\text{VAR}(2)$
+
+In base ai risultati dell'analisi dei residui del modello con un solo lag si passa alla stima di un modello $\text{VAR}(2)$.
+
+```{r}
+modL2 = vars::VAR(df, p = 2, type = "const")
+summary(modL2)
+```
+
+L’output del summary relativo al modello $\text{VAR}(2)$ con le variabili Prod (Produzione Industriale), Occ (Occupazione) e Redd (Reddito Personale Reale) fornisce le seguenti indicazioni:
+
+-   **Stabilità del Sistema:** Le radici del polinomio caratteristico ($0.3818,0.3727, 0.3727$, $0.3396, 0.3396, 0.2921$) sono tutte ampiamente inferiori a $1$ in modulo. Questo conferma che il sistema è stazionario e il modello è stabile: gli shock temporanei che colpiscono le variabili non persistono indefinitamente, ma tendono a rientrare nel lungo periodo, garantendo la validità delle inferenze dinamiche.
+
+-   **Analisi delle Equazioni:**
+
+    -   **Eq. Prod (Produzione):** La produzione mostra una forte persistenza sia al primo ($0.375$) che al secondo lag ($0.156$). Risultano estremamente significativi gli impatti negativi dell'occupazione passata ($-0.403$ al lag 1 e $-0.519$ al lag 2), suggerendo che eccessi occupazionali nei periodi precedenti portino a correzioni della produzione. Il reddito al primo lag influenza positivamente l'output ($0.194$), confermando il ruolo della domanda passata come stimolo industriale.
+
+    -   **Eq. Occ (Occupazione):** La produzione industriale al primo lag agisce come driver fondamentale per le nuove assunzioni ($0.293$, $p$-value $< 0.001$). Anche il reddito passato contribuisce positivamente ($0.175$). È interessante notare che mentre il primo lag dell'occupazione è negativo e significativo ($-0.384$), l'effetto si protrae significativamente anche al secondo lag ($-0.233$), indicando un processo di aggiustamento del mercato del lavoro più lungo e articolato rispetto al modello $\text{VAR}(1)$.
+
+    -   **Eq. Redd (Reddito)**: Il reddito è spiegato positivamente dalla produzione industriale sia al lag 1 ($0.217$) che al lag 2 ($0.122$), evidenziando come la crescita industriale generi flussi di ricchezza con una certa persistenza temporale. L'occupazione passata mostra un effetto negativo e significativo su entrambi i ritardi. La costante risulta molto elevata e significativa ($0.252$), indicando una componente di crescita autonoma del reddito non catturata dalle variabili reali del sistema.
+
+-   **Qualità del Fit (R-squared):** L'inclusione del secondo lag migliora la capacità esplicativa globale. Il modello spiega il $14.2\%$ della varianza della Produzione e l' $13.2\%$ dell'Occupazione. Anche per il Reddito si osserva un miglioramento ($R^2 \approx 5.8\%$). I test F globali sono tutti estremamente significativi ($p$-value nell'ordine di $10^{-13}$ per Prod e Occ), validando l'estensione dell'ordine del ritardo a $p=2$.
+
+-   **Correlazioni Contemporanee:** La matrice di correlazione dei residui conferma la presenza di forti legami istantanei, coerentemente con i modelli precedenti:
+
+    -   **Correlazione (Prod, Occ) =**$0.7343$**:** Persiste una sincronia elevata tra shock produttivi e variazioni occupazionali.
+
+    -   **Correlazione (Occ, Redd) =** $0.5071$**:** Il legame simultaneo tra lavoro e reddito rimane solido.
+
+    -   **Correlazione (Redd, Prod) =** $0.4656$**:** Conferma l'interdipendenza immediata tra produzione e reddito.
+
+    Nonostante la struttura dinamica sia meglio catturata da due ritardi, rimane una forte componente di shock comuni non anticipati. Per isolare correttamente gli effetti dinamici nelle Impulse Response Functions (IRF), l'adozione di uno schema di identificazione (come la decomposizione di Cholesky) resta il passaggio metodologico fondamentale.
+
+#### Residui $\text{VAR}(2)$
+
+```{r,fig.width=10,fig.height=7,dpi=400,fig.align='center',fig.cap="Grafici dei residui del modello VAR(2)"}
+res_modL2 = resid(modL2)
+plot.ts(res_modL2)
+```
+
+I grafici dei residui mostrano che sono centrati in zero e che sembra esserci eteroschedasticità, soprattutto per quanto riguarda i residui relativi al reddito.
+
+```{r,fig.width=10,fig.height=7,dpi=400,fig.align='center',fig.cap="Correlogrammi dei residui del modello VAR(2)"}
+par(mfrow = c(3, 2))
+for(i in 1:NCOL(res_modL1)){
+acf(res_modL2[,i], main = colnames(res_modL2)[i])
+pacf(res_modL2[,i], main = colnames(res_modL2)[i])
+}
+```
+
+In questo caso i correlogrammi non mettono in luce grosse evidenze che sia presenta correlazione seriale residua.
+
+### Diagnostica $\text{VAR}(2)$
+
+#### Test Univariati sui Residui
+
+Test di Ljung-Box
+
+```{r}
+pval = matrix(NA, 2, NCOL(res_modL1))
+colnames(pval) = colnames(res_modL1)
+rownames(pval) = c("r", "rˆ2")
+for(i in 1:NCOL(res_modL1)){
+# Test per autocorrelazione seriale
+pval[1,i] = Box.test(res_modL2[,i], lag=12, type="Ljung")$p.val
+# Test per effetti ARCH (eteroschedasticità)
+pval[2,i] = Box.test(res_modL2[,i]^2, lag=12, type="Ljung")$p.val
+}
+round(pval, 4)
+```
+
+Questo output fornisce i risultati del test formale per l'autocorrelazione e eteroschedasticità:
+
+-   **Autocorrelazione:** La prima riga testa l’ipotesi nulla di assenza di autocorrelazione seriale. I $p$-value sono tutti molto alti ($0.1290$, $0.7687$, $0.1512$), ben al di sopra della soglia dello $0.05$. Accettiamo l’ipotesi nulla e confermiamo formalmente ciò che avevamo visto visivamente: i residui del nostro $\text{VAR}(1)$ non sono autocorrelati e si comportano come “rumore bianco”.
+
+-   **Eteroschedasticità:** rispetto al modello $\text{VAR}(1)$ ci sono dei miglioramenti per quanto riguarda i residui del reddito e sopratutto della produzione ma risultano ancora significativi indice che sia ancora presente eteroschedasticità.
+
+Il nostro modello $\text{VAR}(2)$ è ben specificato per la media (cattura tutta l’autocorrelazione), ma i suoi residui presentano eteroschedasticità (la varianza non è costante nel tempo). Sebbene questo non invalidi le stime dei coefficienti, rende gli standard error e i $p$-value visti nel summary(modL1) tecnicamente inaffidabili.
+
+#### Test Multivariati sui Residui
+
+Si continua l’analisi del $\text{VAR}(2)$ con i test multivariati standard per la stabilità, la normalità e l’autocorrelazione seriale.
+
+```{r}
+# Test di Stabilità (Radici)
+roots(modL2)
+```
+
+```{r}
+# Test di Normalità Multivariata (Jarque-Bera)
+normality.test(modL2)
+```
+
+-   **Stabilità:** Il test sulle roots (radici) del polinomio caratteristico mostra valori tutti ampiamente inferiori a $1$. Questo è un risultato eccellente e conferma che il nostro sistema $\text{VAR}(2)$ è stabile.
+
+-   **Normalità:** Il test di Jarque-Bera multivariato rifiuta nettamente l’ipotesi nulla di normalità dei residui ( $p$-value \< $2.2e-16$). L’output mostra che questo rifiuto è dovuto sia alla presenza di asimmetria (Skewness) sia, e soprattutto, a un eccesso di curtosi (Kurtosis). Questo risultato è molto comune nei dati macroeconomici ed è coerente con quanto già visto nel test sui residui al quadrato ( $r^2$ ), che indicava la presenza di eteroschedasticità.
+
+```{r}
+# Test per Autocorrelazione Seriale (Multivariato)
+# Test Ljung-Box multivariato (Portmanteau)
+serial.test(modL2, lags.pt=16, type = "PT.asymptotic")
+```
+
+```{r}
+# Test Breusch-Godfrey (LM Test)
+serial.test(modL1, lags.bg = 16, type = "BG")
+```
+
+I due principali test per l’autocorrelazione seriale multivariata danno risultati concordi però evidenziano correlazione seriale multivariata.
+
+Questo risultato suggerisce fortemente che, nonostante le apparenze, c’è ancora un problema di autocorrelazione seriale nel nostro modello che i test più semplici non hanno rilevato.
+
+#### ARCH effects (Eteroschedasticità condizionale)
+
+```{r}
+vars::arch.test(modL2, lags.multi = 12)
+```
+
+Il test ARCH multivariato analizza l’ipotesi nulla di “omoschedasticità”, ovvero che i residui abbiano una varianza costante nel tempo. L’output mostra un $p$-value estremamente piccolo ($p$-value = $2.2e-16$), che è quindi fortemente significativo. Questo ci porta a rifiutare nettamente l’ipotesi nulla.
+
+### Analisi di Causalità (Granger)
+
+#### Test di sistema
+
+Eseguiamo ora i test di Causalità di Granger per verificare se i ritardi passati di una variabile sono utili a prevedere i valori futuri delle altre variabili. Questo test verifica la significatività congiunta dei coefficienti di una variabile in tutte le equazioni tranne la propria.
+
+$$H_0: \text{I ritardi della variabile "cause" NON migliorano la previsione delle altre variabili}$$
+
+```{r}
+# Test di sistema (una variabile vs. tutte le altre)
+causality(modL2, cause="Prod")
+causality(modL2, cause="Occ")
+causality(modL2, cause="Redd")
+```
+
+L’analisi dei test di causalità di sistema fornisce una visione chiara delle forti interdipendenze dinamiche:
+
+-   **Produzione** $\rightarrow$ **sistema:** Il test ha un $p$-value di $1.4e-09$. Rifiutiamo l'ipotesi nulla: la produzione industriale ha un potere predittivo fondamentale sull'andamento congiunto di occupazione e reddito.
+
+-   **Occupazione** $\rightarrow$ **sistema:** Il $p$-value è $6.046e-08$. Anche in questo caso rifiutiamo l'ipotesi nulla: i livelli occupazionali passati aiutano a prevedere la dinamica futura del sistema.
+
+-   **Reddito** $\rightarrow$ **sistema:** Il $p$-value è $0.008128$, statisticamente significativo al $1\%$. I ritardi del reddito contribuiscono a spiegare le variazioni di produzione e occupazione.
+
+Tutte e tre le variabili si "causano" a vicenda secondo Granger a livello di sistema. Oltre alla causalità dinamica, i test evidenziano una causalità istantanea estremamente significativa ($p < 2.2e-16$) per tutte le variabili, confermando che gli shock si propagano quasi simultaneamente tra i diversi comparti dell'economia.
+
+#### Test di Granger (Pairwise)
+
+Mentre il test *causality()* precedente era di sistema (una variabile contro tutte le altre congiuntamente), il test *grangertest()* permette di analizzare le relazioni a coppie in modo più specifico.
+
+**Produzione industriale e Occupazione non agricola**
+
+```{r}
+
+p = 2 # Numero di lag del modello scelto (modL2)
+
+# Test 1: Occupazione causa produzione?
+# H0: Occupazione NON causa la produzione
+grangertest(df[, "Prod"] ~ df[, "Occ"], order = p)
+
+# Test 2: La produzione causa occupazione?
+# H0: Produzione NON causa occupazione
+grangertest(df[, "Occ"] ~ df[, "Prod"], order = p)
+```
+
+Esiti dei test:
+
+-   **Test 1 (Occupazione** $\rightarrow$ **Produzione):** Il $p$-value è $6.544e-08$ , quindi statisticamente significativo. Rifiutiamo l’ipotesi nulla e concludiamo che la crescita passata dell'occupazione causa la crescita attuale della produzione.
+
+-   **Test 2 (Produzione** $\rightarrow$ **Occupazione):** Il $p$-value è $7.526e-11$, quindi statisticamente significativo. Rifiutiamo l’ipotesi nulla e concludiamo che esiste una relazione bidirezionale dove anche la crescita passata della produzione causa la crescita attuale dell'occupazione.
+
+Esiste una relazione bidirezionale. Questo nucleo "reale" dell'economia si auto-alimenta: l'output spinge le assunzioni e la nuova forza lavoro sostiene i ritmi produttivi.
+
+**Produzione industriale e reddito personale reale**
+
+```{r}
+# Test 1:Il reddito causa produzione?
+# H0: Reddito NON causa la produzione
+grangertest(df[, "Prod"] ~ df[, "Redd"], order = p)
+
+# Test 2: La produzione causa reddito?
+# H0: Produzione NON causa occupazione
+grangertest(df[, "Redd"] ~ df[, "Prod"], order = p)
+```
+
+Esiti dei test:
+
+-   **Test 1 (Reddito** $\rightarrow$ **Produzione):** Il $p$-value è $0.1221$ , quindi non statisticamente significativo. Non si rifiuta l’ipotesi nulla e concludiamo che la crescita passata del reddito non causa la crescita attuale della produzione.
+
+-   **Test 2 (Produzione** $\rightarrow$ **Reddito):** Il $p$-value è $0.0008109$, quindi statisticamente significativo. Rifiutiamo l’ipotesi nulla e concludiamo che la crescita passata della produzione causa la crescita attuale del reddito.
+
+La relazione è prevalentemente unidirezionale, è l'attività industriale a generare la ricchezza delle famiglie.
+
+**Occupazione non agricola e reddito personale reale**
+
+```{r}
+# Test 1: Il reddito causa reddito?
+# H0: reddito NON causa l'occupazione
+grangertest(df[, "Occ"] ~ df[, "Redd"], order = p)
+
+# Test 2: Occupazione causa reddito?
+# H0: Il occupazione causa il reddito
+grangertest(df[, "Redd"] ~ df[, "Occ"], order = p)
+```
+
+Esiti dei test:
+
+-   **Test 1 (Reddito** $\rightarrow$ **Occupazione):** Il $p$-value è $5.077e-05$, quindi statisticamente significativo. Non si rifiuta l’ipotesi nulla e concludiamo che la crescita passata del reddito causa la crescita attuale dell'occupazione.
+
+-   **Test 2 (Occupazione** $\rightarrow$ **Reddito):** Il $p$-value è molto alto $0.765$ , quindi non statisticamente significativo. Rifiutiamo l’ipotesi nulla e concludiamo che la crescita passata dell'occupazione non causa la crescita attuale del reddito.
+
+Emerge una chiara relazione unidirezionale dove l'occupazione guida il reddito. La crescita salariale aggregata dipende quindi strettamente dall'espansione del mercato del lavoro.
+
+#### Analisi economica del sistema
+
+L’integrazione tra le funzioni di cross-correlazione e i test di Granger permette di tracciare una mappa precisa della trasmissione degli impulsi economici:
+
+La Produzione Industriale si conferma come il motore primario dell'economia. Le CCF mostrano che essa anticipa l'occupazione (ritardo negativo significativo), e i test di Granger validano un legame bidirezionale: fabbriche e posti di lavoro operano in simbiosi, creando un nucleo produttivo reattivo.
+
+La ricchezza si trasmette poi lungo una catena lineare: la produzione genera il reddito, ma lo fa principalmente attraverso il canale dell'occupazione. I test pairwise chiariscono infatti che è l'occupazione a causare il reddito e non viceversa. Questo suggerisce che il benessere delle famiglie non aumenta autonomamente, ma è l'esito finale di un processo che parte dal settore industriale e passa per il mercato del lavoro.
+
+In sintesi, emerge un circolo virtuoso dove la produzione industriale innesca il ciclo, l'occupazione lo consolida e lo trasforma in reddito distribuito. Sebbene il reddito a livello di sistema mostri un feedback verso le altre variabili (sostenendo la domanda), la struttura portante dell'economia analizzata poggia sulla capacità del settore produttivo di generare impiego, rendendo ogni anello della catena indispensabile per trasformare la crescita industriale in benessere diffuso.
+
+### Impulse Response Function (IRF)
+
+Si procede ora con l’analisi degli effetti di uno shock. Utilizziamo la Funzione di Risposta all’Impulso (IRF) ortogonalizzata tramite la decomposizione di Cholesky.
+
+La decomposizione di Cholesky è sensibile all’ordine delle variabili. Si è scelto l’ordine:
+
+1.  Produzione Industriale
+2.  Occupazione non agricola
+3.  Reddito personale reale
+
+Questo impone la seguente assunzione economica:
+
+-   Uno shock contemporaneo alla produzione industriale può influenzare nello stesso mese produzione, occupazione e reddito.
+
+-   Uno shock contemporaneo all'occupazione può influenzare l'occupazione e reddito personale, ma non la produzione.
+
+-   Uno shock contemporaneo al reddito personale può influenzare solo sé stesso.
+
+Si è scelto l'ordine Produzione$\rightarrow$ Occupazione $\rightarrow$ Reddito seguendo la logica della catena di trasmissione del valore. La Produzione Industriale è identificata come la variabile più esogena (motore del ciclo), mentre il reddito personale reale è la variabile più endogena, che recepisce gli shock provenienti sia dal settore produttivo che dal mercato del lavoro nello stesso periodo di riferimento.
+
+```{r,fig.height=8,fig.width=10,dpi=400,fig.cap="Funzione di Risposta all’Impulso (IRF) ortogonalizzata VAR(2): ordine Produzione, Occupazione e Reddito."}
+irf_chol = irf(modL2,
+                impulse = c("Prod", "Occ", "Redd"),
+                response = c("Prod", "Occ", "Redd"),
+                n.ahead = 12, boot = TRUE, ortho = TRUE, runs = 1000)
+par(mfrow = c(3,3))
+plot(irf_chol, plot.type = "single")
+```
+
+L’analisi delle Funzioni di Risposta all’Impulso (IRF), dove le righe indicano la variabile che subisce lo shock (Impulso) e le colonne la variabile che reagisce (Risposta), conferma la dinamica ciclica e la gerarchia temporale del sistema:
+
+-   **Prima Riga (Shock alla Produzione Industriale):** Uno shock positivo alla produzione ha un effetto immediato, positivo e statisticamente significativo su tutte le variabili del sistema. Come previsto, l’espansione industriale "trascina" istantaneamente sia l’occupazione (grafico in alto-centro) che il reddito personale (grafico in alto-destra), a conferma del ruolo della produzione come motore trainante dell'economia. L'effetto tende a riassorbirsi rapidamente entro i primi $3-4$ mesi, coerentemente con la stabilità del modello $\text{VAR}$ rilevata in precedenza.
+
+-   **Seconda Riga (Shock all'Occupazione):** Uno shock positivo e inatteso all'occupazione genera una risposta positiva e significativa sul reddito (grafico centro-destra), riflettendo l'immediato aumento della massa salariale. Tuttavia, come imposto dall'ordine di Cholesky, lo shock non ha un effetto positivo immediato sulla produzione (grafico centro-sinistra); al contrario, si osserva una successiva contrazione tecnica della produzione e del reddito stesso intorno al secondo mese, suggerendo un meccanismo di aggiustamento ciclico del mercato del lavoro.
+
+-   **Terza Riga (Shock al Reddito Personale Reale):** Uno shock "puro" al reddito, non derivante da produzione o lavoro, mostra un impatto limitato e breve. Si registra una risposta positiva e significativa sulla produzione industriale e sull'occupazione (grafici in basso-sinistra e centro) al primo mese, confermando il feedback della domanda rilevato dai test di Granger: un aumento della ricchezza percepita stimola temporaneamente l'attività produttiva e la richiesta di lavoro.
+
+In sintesi, i grafici confermano che il sistema reagisce con estrema rapidità agli impulsi. La forte significatività degli impatti al tempo zero (Lag $0$) valida la scelta di utilizzare una decomposizione di Cholesky per isolare gli shock.
+
+Data la forte correlazione contemporanea residua rilevata in precedenza, verifichiamo quanto le risposte alle funzioni ad impulsi siano sensibili all’ordine delle variabili nella decomposizione di Cholesky.
+
+Nel modello base si è assunto che la produzione fosse la variabile più esogena. Qui invertiamo l’ordine, assumendo che gli shock partano dall'occupazione seguiti del reddito e infine dalla produzione.
+
+```{r,fig.height=8,fig.width=10,dpi=400,fig.cap="Funzione di Risposta all’Impulso (IRF) ortogonalizzata VAR(2): ordine Reddito, Occupazione e Produzione."}
+# Creazione di un nuovo dataset con ordine invertito
+df_new = df[, c("Redd", "Occ", "Prod")]
+
+# Ri-stima del modello con il nuovo ordine
+modL2_new = vars::VAR(df_new, p = 2, type = "const")
+
+# Calcolo delle nuove IRF
+irf_new = irf(modL2_new, 
+               n.ahead = 12, boot = TRUE, ortho = TRUE, runs = 1000)
+
+# Grafico
+par(mfrow = c(3,3))
+plot(irf_new,plot.type = "single")
+```
+
+Il test di sensibilità conferma la robustezza del modello. Sebbene i $p$-value di causalità istantanea indicassero un'elevata sincronia, la persistenza e la direzione delle risposte non cambiano drasticamente con l'ordine delle variabili.
+
+Si mantenere per l'analisi principale l'ordine Prod$\rightarrow$ Occ $\rightarrow$ Redd, poiché meglio riflette la gerarchia decisionale delle imprese e la sequenza temporale osservata nei cross-correlogrammi, dove la produzione industriale funge da innesco ciclico primario.
+
+### Forecast Error Variance Decomposition (FEVD)
+
+L’analisi della FEVD (Decomposizione della Varianza dell’Errore di Previsione) è complementare alle IRF. Dice quanta parte dell’incertezza futura (la varianza dell’errore di previsione) di una variabile è spiegata dagli shock “propri” rispetto a quelli provenienti dalle altre variabili del sistema. Anche questa analisi dipende dall’ordine di Cholesky scelto.
+
+```{r,fig.height=7,fig.width=9,dpi=400,fig.cap="Decomposizione della Varianza dell’Errore di Previsione VAR(2)."}
+fevd_us = fevd(modL2, n.ahead = 12)
+plot(fevd_us)
+```
+
+I grafici mostrano la scomposizione percentuale della varianza dell'errore di previsione per le tre variabili fino a $12$ mesi nel futuro, confermando la struttura di interdipendenza rilevata nelle analisi precedenti.
+
+-   **FEVD per la produzione**: La varianza dell’errore di previsione della produzioneindustriale è spiegata quasi esclusivamente da shock propri (area grigio scuro), che pesano per oltre il $95\%$ lungo tutto l'orizzonte temporale considerato. Il contributo di Occupazione e Reddito è pressoché nullo. Questo risultato conferma che la Produzione si comporta come la variabile più esogena del sistema: la sua incertezza futura è guidata quasi esclusivamente dalla sua stessa dinamica interna.
+
+-   **FEVD per l'ccupazione:** L’incertezza nell'occupazione è spiegata da due forze principali di simile entità. Fin dal primo mese, circa il $50\%$ dell'errore di previsione è attribuibile a shock alla produzione, mentre il restante $50\%$ è spiegato da shock all'occupazione stessa. Il ruolo del Reddito rimane trascurabile. Questo equilibrio sottolinea la fortissima dipendenza del mercato del lavoro dai cicli industriali, coerentemente con l'elevata correlazione contemporanea osservata.
+
+-   **FEVD per il Reddito Personale Reale:** L'incertezza del reddito personale reale mostra una scomposizione più articolata. Sebbene la componente prevalente sia legata agli shock propri (circa il $70\%$), una quota significativa della varianza (circa il $20\%$) è spiegata costantemente dagli shock alla produzione e, in misura minore (circa il $10\%$), da quelli all'occupazione. Questo conferma che il reddito delle famiglie è, in ultima istanza, un ricettore degli impulsi che partono dal settore reale dell'economia.
+
+La FEVD conferma pienamente la struttura gerarchica ipotizzata con l’ordine di Cholesky (Prod$\rightarrow$ Occ $\rightarrow$ Redd). La Produzione Industriale emerge come il motore dominante, i cui shock spiegano una quota rilevante dell'incertezza futura di Occupazione e Reddito, validando empiricamente la catena di trasmissione che parte dalle fabbriche per arrivare alle tasche dei cittadini.
+
+## Modello a funzione di trasferimento (TFM)
+
+Dopo aver analizzato le interdipendenze dinamiche e i meccanismi di feedback attraverso il modello VAR, approfondiamo la relazione specifica tra reddito personale reale e Produzione Industriale utilizzando un approccio a Funzione di Trasferimento (TFM).
+
+#### Inquadramento Teorico e Scelta delle Variabili
+
+La scelta di focalizzare l'analisi su queste due serie risiede nei risultati dei test di causalità di Granger e nelle dinamiche rilevate a livello di sistema. Mentre la produzione industriale funge da innesco del ciclo economico, i test hanno evidenziato come il reddito eserciti un'influenza significativa sulla produzione, agendo da segnale di domanda per le imprese. In questo contesto:
+
+-   Il reddito personale reale funge da variabile di input.
+
+-   La produzione industriale rappresenta la variabile di output (dipendente).
+
+Il modello a funzione di trasferimento permette di modellare esplicitamente come una variazione nel potere d'acquisto delle famiglie si "trasferisca" nel tempo sui livelli produttivi delle fabbriche. Questo approccio consente di distinguere tra l'impatto immediato dello shock di reddito e gli effetti ritardati, catturando la velocità con cui il sistema industriale reagisce ai mutamenti della domanda aggregata.
+
+### Prewhitening e CCF sui residui
+
+```{r prewhiten, fig.height=5,fig.width=9,dpi=300,fig.cap="Funzione di cross-correlazione tra serie output e input filtrate con il filtro per l'input."}
+# Serie input sbiancata dall'autocorrelazione
+alfa = df[,3]
+
+# Applicato stesso filtro dell'input all'output
+# (solo differenziazione)
+beta = df[,1]
+
+ccf(beta, alfa, lag.max = 10, main = "CCF(beta, alfa)")
+```
+
+Dall’analisi della funzione di cross-correlazione tra i residui pre-sbiancati emerge un chiaro picco al lag $0$, che identifica $b=0$. Il successivo decadimento dei coefficienti suggerisce una componente inerziale nel processo di trasferimento, portando all’identificazione di un termine al denominatore ($r=1$). La mancanza di ulteriori picchi significativi nei lag positivi immediati permette di impostare il numeratore a $s=0$. Questa struttura ($0,0,1$) descrive un sistema in cui le variazioni dell'occupazione hanno un impatto immediato sulla produzione, i cui effetti persistono parzialmente nel tempo prima di esaurirsi.
+
+### Stima del modello
+
+```{r,fig.height=5,fig.width=9,dpi=300,fig.cap="Funzione di cross-correlazione tra serie dei residui del primo modello stimato e l'input."}
+# MTS::tfm1(y, x, orderN = c(p,d,q), orderX = c(r,s,b))
+m.1 = MTS::tfm1(df[,1], df[,3], orderN = c(0,0,0), orderX = c(1,0,0))
+residui = ts(m.1$residuals,frequency = 12,start = c(1980,2))
+ccf(alfa, residui, main = "CCF(alfa, residui m.1)")
+```
+
+```{r,fig.height=7,fig.width=9,dpi=300,fig.cap="Funzione d'autocorrelazione globale e parziale dei residui del primo modello stimato."}
+par(mfcol = c(2,1))
+acf(residui, main = "ACF residui modello")
+pacf(residui, main = "PACF residui modello")
+```
+
+I residui mostrano correlazione seriale quindi è opportuno modellare anche la parte di disturbo $\eta_t$ del modello a funzione di trasferimento.
+
+```{r,fig.height=5,fig.width=9,dpi=300,fig.cap="Funzione di cross-correlazione tra serie dei residui del secondo modello stimato e l'input."}
+m.2 = MTS::tfm1(df[,1], df[,3], orderN = c(1,0,0), orderX = c(1,0,0))
+residui2 = ts(m.2$residuals,frequency = 12,start = c(1980,2))
+```
+
+```{r,fig.height=7,fig.width=9,dpi=300,fig.cap="Funzione d'autocorrelazione globale e parziale dei residui del secondo modello stimato."}
+par(mfcol = c(2,1))
+acf(residui2, main = "ACF residui modello")
+pacf(residui2, main = "PACF residui modello")
+Box.test(residui2,lag=24,type = "Ljung")
+```
+
+Provando diverse specificazione del modello a funzione di trasferimento non si notato miglioramenti, quindi nonostante la permanenza di alcuni picchi marginalmente superiori alle bande di confidenza nella CCF (valori inferiori a $0.15$), si è scelto di mantenere lo stesso il modello. La validità del modello è confermata dal test di Ljung-Box sui residui (che non permette di rifiutare l'ipotesi di incorrelazione) e dalla significatività dei parametri.
+
+## $\text{ARIMAX}$
+
+Si procede con l'adattamento di un modello $\text{ARIMAX}$ che rappresenta una versione più sofisticata di un classico modello univariato $\text{ARIMA}$ dove vengono aggiunte come variabili esogene l'occupazione non agricola e il reddito personale reale.
+
+```{r,message=FALSE}
+require(forecast)
+y = df[,1]
+X = df[,c(2,3)]
+# y = produzione industriale, x1 = occupazione non agrcola
+# x2 = reddito personale reale
+fit.Arimax = auto.arima(y, xreg = X,seasonal = FALSE)
+summary(fit.Arimax)
+```
+
+### Struttura del Modello
+
+#### Componente rumore
+
+Il modello selezionato è un $\text{ARIMA(4,0,2)}$ applicato ai residui della regressione.
+
+**Componente Autoregressiva:** La forte significatività dei parametri $\text{AR}$ indica che la produzione industriale possiede un'elevata persistenza e dipende fortemente dai propri livelli passati.
+
+**Media Mobile:** I termini $\text{MA}$ suggeriscono che il sistema reagisce in modo articolato agli shock casuali di breve periodo, "smussando" le fluttuazioni inattese per ritornare verso il trend determinato dalle esogene.
+
+#### Analisi delle Variabili Esogene
+
+A differenza del $\text{TFM}$ o del $\text{VAR}$, l'$\text{ARIMAX}$ qui stimato quantifica l'impatto contemporaneo delle esogene sulla produzione:
+
+**Occupazione:** Il coefficiente $1.0253$ è statisticamente significativo (il rapporto tra stima e errore standard è circa $21.7$).
+
+**Reddito:** Il coefficiente $0.1352$ è positivo e significativo (il rapporto tra stima e errore standard è circa $3.06$).
+
+## Previsioni
+
+L'attenzione si sposta dall'analisi strutturale alla valutazione delle performance previsive, con l'obiettivo di determinare quale approccio metodologico offra la migliore capacità di anticipare l'andamento della produzione industriale. La scelta di focalizzare il confronto sulla produzione industriale come variabile dipendente non è casuale, ma risiede nel suo ruolo di "motore" del ciclo economico emerso nelle analisi precedenti. La sua natura dinamica permette di testare se i modelli multivariati siano effettivamente in grado di catturare la complessità degli shock reali meglio di un approccio isolato.
+
+La valutazione verrà effettuata mettendo a confronto quattro diverse classi di modelli, caratterizzate da un crescente livello di complessità informativa:
+
+-   **Modello Univariato:** Rappresentato da un processo $\text{ARIMA}$, questo approccio si basa esclusivamente sull'inerzia e sulla storia passata della serie stessa, ignorando qualsiasi interazione esterna.
+
+-   **Modello** $\text{ARIMAX}$**:** Un'estensione del modello univariato che include come variabili esogene esterne sia l'occupazione che il reddito. Questo modello permette di valutare l'impatto contemporaneo delle spinte del lavoro e della domanda sulla produzione.
+
+-   **Funzione di Trasferimento (**$\text{TFM}$**):** Un approccio ibrido che modella specificamente come gli shock di una variabile di input (l'Occupazione) si distribuiscano e si trasferiscano nel tempo sulla variabile di output, integrando una componente di disturbo stocastico.
+
+-   **Vector Autoregression (**$\text{VAR}$**):** Un modello multivariato che cattura le interdipendenze e i meccanismi di feedback simultanei tra Produzione, Occupazione e Reddito, trattando tutte le variabili come endogene.
+
+La metodologia adottata prevede la suddivisione dei dati in un insieme di stima, utilizzato per adattare i modelli, e un insieme di test, necessario per verificarne la reale capacità predittiva su dati non osservati, evitando problemi di sovradattamento. Tutte le previsioni verranno effettuate sulle serie espresse in log-differenze prime, focalizzando l'analisi sulla capacità di anticipare i tassi di crescita e la volatilità del sistema.
+
+Per rendere la valutazione robusta, verrà utilizzato un approccio a finestra mobile con previsione a un passo ($h=1$). Questa tecnica permette di aggiornare i parametri dei modelli man mano che nuove informazioni diventano disponibili, riflettendo meglio la capacità di adattamento dei modelli ai mutamenti strutturali. Infine, la precisione dei forecast verrà quantificata tramite gli indicatori $\text{MSE}$ (Mean Square Error) e $\text{MAE}$ (Mean Absolute Error). Per stabilire se le differenze nelle performance siano statisticamente rilevanti e non dovute al caso, verrà applicato il test di Diebold-Mariano, confrontando i vari modelli adattati.
+
+### Calcolo previsioni nell'insieme di stima
+
+```{r,warning=FALSE}
+stima = window(dati_trasf, end = c(2021, 6))
+test = window(dati_trasf, start = c(2021, 7))
+
+n_total = nrow(dati_trasf)
+n_test = nrow(test)
+train_end = n_total - n_test
+
+# Ordini TFM (identificati da analisi teorica)
+b = 0 # ritardo minimo input
+s = 0 # grado numeratore
+r = 1 # grado denominatore (risposta interna)
+d_tfm = 0 # differenza input
+p_tfm = 0 # AR del rumore
+q_tfm = 1 # MA del rumore
+
+# Mapping TFM → ARIMAX stabile
+AR_eq = r + p_tfm # AR totale
+I_eq = d_tfm # differencing
+MA_eq = r + q_tfm # MA totale
+
+# Serie reale di confronto (Produzione Industriale)
+actual_prod = test[,1]
+
+# --- Inizializzazione Vettori ---
+pred_arima         = numeric(n_test)
+pred_arimax_expost = numeric(n_test) # Con esogene REALI
+pred_arimax_exante = numeric(n_test) # Con esogene PREVISTE
+pred_tfm           = numeric(n_test) 
+pred_var_statico   = numeric(n_test)
+pred_var_dim       = numeric(n_test)
+pred_vecm          = numeric(n_test)
+
+# Loop Finestra Mobile
+for(i in 1:n_test) {
+  
+  # 1. Definizione finestra corrente
+  current_train = dati_trasf[i:(train_end + i - 1), ]
+  
+  # -----------------------------------------------------------------------
+  # A. PREPARAZIONE ESOGENE
+  # -----------------------------------------------------------------------
+  
+  # Scenario 1: EX-ANTE (Previsione Realistica)
+  # Si prevedono le esogene usando solo il passato disponibile
+  fit_occ_exog  = forecast::auto.arima(current_train[,2])
+  pred_occ_val  = forecast::forecast(fit_occ_exog, h = 1)$mean
+  
+  fit_redd_exog = forecast::auto.arima(current_train[,3])
+  pred_redd_val = forecast::forecast(fit_redd_exog, h = 1)$mean
+  
+  xreg_future_exante = matrix(c(pred_occ_val, pred_redd_val), nrow = 1)
+  colnames(xreg_future_exante) = c("Occ", "Redd")
+  
+  # Scenario 2: EX-POST (Analisi di Scenario)
+  xreg_future_expost = matrix(dati_trasf[train_end + i, c(2,3)], nrow = 1)
+  colnames(xreg_future_expost) = c("Occ", "Redd")
+
+  # -----------------------------------------------------------------------
+  # B. STIMA E PREVISIONE MODELLI
+  # -----------------------------------------------------------------------
+  
+  # per VECM
+  current_train_lev = window(Log.Serie, 
+                             start = time(Log.Serie)[i], 
+                             end = time(Log.Serie)[train_end + i - 1])
+  
+  # --- 1. ARIMA Univariato ---
+  fit_arima = forecast::auto.arima(current_train[,1])
+  pred_arima[i] = forecast::forecast(fit_arima, h = 1)$mean
+  
+  # --- 2. ARIMAX (Doppia Previsione) ---
+  fit_arimax = forecast::auto.arima(current_train[,1],
+                                    xreg = current_train[,c(2,3)])
+  
+  # Previsione EX-ANTE (Confrontabile con VAR)
+  pred_arimax_exante[i] = forecast::forecast(fit_arimax,
+                                      xreg = xreg_future_exante, h = 1)$mean
+                                      
+  # Previsione EX-POST (Benchmark teorico ideale)
+  pred_arimax_expost[i] = forecast::forecast(fit_arimax,
+                                      xreg = xreg_future_expost, h = 1)$mean
+  
+  # --- 3. TFM (Si usa solo con esogene note) ---
+  fit_tfm = forecast::Arima(current_train[,1],
+                            order = c(AR_eq, I_eq, MA_eq),
+                            xreg = current_train[,2], include.mean = TRUE)
+  pred_tfm[i] =
+    as.numeric(forecast::forecast(fit_tfm,
+                                  h = 1,
+                                  xreg = xreg_future_expost[,2])$mean)
+  
+  # --- 4. VAR(2)-Statico ---
+  fit_var_s = vars::VAR(current_train, p = 2, type = "const")
+  pred_var_statico[i] = predict(fit_var_s, n.ahead = 1)$fcst$Prod[1,1]
+  
+  # --- 5. VAR(2)-Dinamico ---
+  lag_select = vars::VARselect(current_train, lag.max = 12, type = "both")
+  K_opt = lag_select$selection['SC(n)']
+  if(is.na(K_opt) || K_opt < 1) K_opt = 1 
+  fit_var_d = vars::VAR(current_train, p = K_opt, type = "const")
+  pred_var_dim[i] = predict(fit_var_d, n.ahead = 1)$fcst$Prod[1,1]
+  
+  # --- 6. VECM ---
+  jo_test = urca::ca.jo(current_train_lev, type = "trace",
+                        ecdet = "const", K = 2, spec = "longrun")
+  fit_vecm_var = vars::vec2var(jo_test, r = 1)
+  fcast_vecm = predict(fit_vecm_var, n.ahead = 1)
+  last_obs_log = tail(current_train_lev[,1], 1)
+  pred_log_lev = fcast_vecm$fcst$Prod[1,1]
+  pred_vecm[i] = (pred_log_lev - last_obs_log) * 100
+}
+```
+
+### Valori stimati dai modelli nell'insieme di stima
+
+```{r,fig.height=5,fig.width=9,dpi=400,fig.cap="Confronto tra valori osservati e stimati nell'insieme di stima.",warning=FALSE,message=FALSE}
+require(ggplot2)
+require(tidyr)
+require(zoo)
+require(scales)
+
+# -----------------------------------------------------------------
+# Estrazione dei Valori stimati sui Log-Diff perc
+# -----------------------------------------------------------------
+# Ri-stima dei modelli sull'intero set 'stima'
+fit_arima_in  <- forecast::auto.arima(stima[,1])
+fit_arimax_in <- forecast::auto.arima(stima[,1], xreg = stima[,c(2,3)])
+fit_var_in    <- vars::VAR(stima, p = 2, type = "const")
+fit_tfm_in    <- forecast::Arima(stima[,1],
+                                 c(AR_eq, I_eq, MA_eq), xreg = stima[,2])
+
+# Si recuperano i log-livelli corrispondenti al periodo di 'stima'
+stima_lev <- window(Log.Serie, end = c(2021, 6))
+fit_jo_in <- ca.jo(stima_lev, type = "trace",
+                   ecdet = "const", K = 2, spec = "longrun")
+fit_vecm_in <- vec2var(fit_jo_in, r = 1)
+
+# Estrazione fit (tassi di crescita)
+fitted_arima  <- as.numeric(fitted(fit_arima_in))
+fitted_arimax <- as.numeric(fitted(fit_arimax_in))
+fitted_tfm    <- as.numeric(fitted(fit_tfm_in))
+fitted_var    <- as.numeric(fitted(fit_var_in)[,1])
+
+# Estrazione fit VECM: essendo in livelli, si calcola la diff logaritmica
+# fitted(fit_vecm_in) restituisce i log-livelli stimati
+fitted_vecm_lev <- fitted(fit_vecm_in)[,1]
+# Si calcola il tasso di crescita stimato (log_y_t - log_y_t-1) * 100
+# Per allineare, si perdono i primi K ritardi (K=2)
+fitted_vecm <- diff(fitted_vecm_lev) * 100 
+
+# Allineamento temporale (il VAR(2) e VECM perdono i primi punti)
+n_stima <- nrow(stima)
+idx_ref <- 3:n_stima 
+
+# ---------------------------------------------------------
+# Trasformazione ai Livelli (In-Sample)
+# ---------------------------------------------------------
+actual_levels_in <- as.numeric(Serie[idx_ref])
+prev_levels_in   <- as.numeric(Serie[idx_ref - 1])
+
+lev_fit_arima  <- prev_levels_in * exp(fitted_arima[idx_ref] / 100)
+lev_fit_arimax <- prev_levels_in * exp(fitted_arimax[idx_ref] / 100)
+lev_fit_tfm    <- prev_levels_in * exp(fitted_tfm[idx_ref] / 100)
+lev_fit_var    <- prev_levels_in * exp(fitted_var / 100)
+lev_fit_vecm   <- prev_levels_in * exp(fitted_vecm / 100) # Aggiunto VECM
+
+# --------------------------------------------------------------
+# Visualizzazione Grafica delle stime
+# --------------------------------------------------------------
+plot_data_in <- data.frame(
+  Tempo  = as.Date(zoo::as.yearmon(time(stima)[idx_ref])),
+  Reale  = actual_levels_in,
+  ARIMA  = lev_fit_arima,
+  ARIMAX = lev_fit_arimax,
+  TFM    = lev_fit_tfm,
+  VAR    = lev_fit_var,
+  VECM   = lev_fit_vecm  # Aggiunto VECM
+)
+
+# ---------------------------------------------------------
+# Preparazione Dati (Filtro dal 2000)
+# ---------------------------------------------------------
+data_inizio <- as.Date("2000-01-01")
+plot_data_2000 <- plot_data_in[plot_data_in$Tempo >= data_inizio, ]
+
+modelli <- c("ARIMA", "ARIMAX", "TFM", "VAR", "VECM")
+colori  <- c("ARIMA" = "blue", "ARIMAX" = "red",
+             "TFM" = "darkgreen", "VAR" = "purple", "VECM" = "brown")
+
+# ---------------------------------------------------------
+# Loop per generare i grafici singoli
+# ---------------------------------------------------------
+for (mod in modelli) {
+  p <- ggplot(plot_data_2000, aes(x = Tempo)) +
+    geom_line(aes(y = Reale, linetype = "Osservato"),
+              color = "black", size = 0.8) +
+    geom_line(aes_string(y = mod, color = shQuote(mod),
+                         linetype = shQuote("Stimato")),
+              size = 0.8) +
+    scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+    scale_color_manual(values = colori) +
+    scale_linetype_manual(values = c("Osservato" = "solid",
+                                     "Stimato" = "dashed")) +
+    labs(title = paste("Bontà di Adattamento nell'insieme di stima:", mod),
+         subtitle = "Confronto tra dati osservati e valori stimati dal 2000",
+         x = "Anno", y = "Indice Produzione",
+         color = "Modello", linetype = "Legenda") +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 45, hjust = 1))
+  print(p)
+}
+```
+
+I grafici mostrano una buona bontà di adattamento confermano la solidità della stima, tutti i modelli replicano fedelmente la storia della produzione industriale, ma con qualche leggera differenza. L'$\text{ARIMA}$ si dimostra un benchmark affidabile nel seguire il trend, pur apparendo leggermente meno reattivo di fronte a shock improvvisi. Il $\text{VAR}$ è il modello più aderente in assoluto, ma questa estrema vicinanza ai dati suggerisce un possibile *sovradattamento*, il sistema insegue anche il "rumore" della serie.
+
+### Visualizzazione grafica delle previsioni
+
+```{r,fig.height=6,fig.width=10,dpi=400,fig.cap="Confronto tra valori osservati e previsti dell'insieme di verifica per i modelli adattati nell'insieme di stima.",warning=FALSE}
+# ---------------------------------------
+# Visualizzazione Grafica Previsioni
+# ---------------------------------------
+# ---------------------------------------------------------
+# Inversione della Trasformazione (da Log-Diff*100 a Livelli)
+# ---------------------------------------------------------
+back_to_levels <- function(pred_log_diff_100, start_value) {
+  pred_log_diff <- pred_log_diff_100 / 100
+  # Calcola i logaritmi cumulati: log(y_t) = log(y_0) + sum(delta_log_y)
+  log_levels <- log(start_value) + cumsum(pred_log_diff)
+  return(exp(log_levels))
+}
+# ---------------------------------------------------------
+# Preparazione Dati Storici (Stima)
+# ---------------------------------------------------------
+# ultimi 96 mesi
+n_hist <- 96 
+hist_idx <- (train_end - n_hist + 1):train_end
+
+df_hist <- data.frame(
+  Tempo  = as.Date(zoo::as.yearmon(time(Serie)[hist_idx])),
+  Livello = as.numeric(Serie[hist_idx]),
+  Modello = "Storico"
+)
+# ---------------------------------------------------------
+# Preparazione Previsioni e Valori Reali (Test)
+# ---------------------------------------------------------
+last_train_level = Serie[train_end,1]
+lev_actual = Serie[(train_end + 1):n_total]
+lev_arima  = back_to_levels(pred_arima, last_train_level)
+lev_arimax = back_to_levels(pred_arimax_expost, last_train_level)
+lev_arimax_eso_prev = back_to_levels(pred_arimax_exante, last_train_level)
+lev_tfm    = back_to_levels(pred_tfm, last_train_level)
+lev_varS   = back_to_levels(pred_var_statico, last_train_level)
+lev_varD   = back_to_levels(pred_var_dim, last_train_level)
+lev_vecm   = back_to_levels(pred_vecm, last_train_level) # Aggiunto VECM
+
+plot_data_test <- data.frame(
+  Tempo  = as.Date(zoo::as.yearmon(time(test))),
+  Reale  = as.numeric(lev_actual),
+  ARIMA  = as.numeric(lev_arima),
+  ARIMAX = as.numeric(lev_arimax),
+  ARIMAX_Eso_prev = as.numeric(lev_arimax_eso_prev),
+  TFM    = as.numeric(lev_tfm),
+  VAR_S  = as.numeric(lev_varS),
+  VAR_D  = as.numeric(lev_varD),
+  VECM   = as.numeric(lev_vecm)
+)
+
+plot_long_test <- pivot_longer(plot_data_test, cols = -Tempo, 
+                               names_to = "Modello",
+                               values_to = "Livello")
+
+# Unione stima + Test
+plot_final <- rbind(df_hist, plot_long_test)
+# ---------------------------------------------------------
+# Visualizzazione Grafica Completa
+# ---------------------------------------------------------
+ggplot(plot_final, aes(x = Tempo, y = Livello,
+                       color = Modello, linetype = Modello)) +
+  geom_line(size = 0.6) +
+  geom_point(data = subset(plot_final,
+                           Modello %in% c("Storico", "Reale")), 
+             size = 0.8, alpha = 0.5) +
+  geom_vline(xintercept = as.numeric(as.Date(zoo::as.yearmon(
+    time(Serie)[train_end]))), 
+             linetype = "dotted", color = "gray40", size = 0.6) +
+  annotate("text", x = as.Date(zoo::as.yearmon(time(Serie)[train_end])), 
+           y = max(plot_final$Livello), label = "Inizio Test", 
+           hjust = 1.1, vjust = 1, size = 3, color = "gray40") +
+  scale_x_date(
+    breaks = scales::breaks_pretty(n = 8),
+    labels = scales::label_date_short()
+  ) +
+  scale_color_manual(values = c("Storico" = "black", "Reale" = "black", 
+                                "ARIMA" = "blue", "ARIMAX" = "red", 
+                                "TFM" = "darkgreen", "VAR_S" = "purple",
+                                "VAR_D" = "gold","VECM" = "brown",
+                                "ARIMAX_Eso_prev" = "green")) +
+  scale_linetype_manual(values = c("Storico" = "solid", "Reale" = "solid", 
+                                   "ARIMA" = "solid", "ARIMAX" = "solid", 
+                                   "TFM" = "solid", "VAR_S" = "solid",
+                                   "VAR_D" = "solid","VECM" = "solid",
+                                   "ARIMAX_Eso_prev" = "solid")) +
+  labs(title = "Previsioni insieme di test e Dati Storici",
+       subtitle = "Produzione Industriale: Livelli originali",
+       x = "Tempo", y = "Indice Produzione") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.ticks.x = element_line(color = "black"),
+        panel.grid.minor = element_blank())
+```
+
+L'analisi del grafico delle previsioni dell'insieme di test permette di valutare la capacità dei modelli di anticipare la dinamica reale della produzione industriale in un orizzonte temporale non osservato durante la stima.
+
+Dall'osservazione visiva del grafico, si possono trarre le seguenti conclusioni:
+
+-   **Comportamento** $\text{ARIMA}$**:** La previsione dell'$\text{ARIMA}$ (linea blu tratteggiata) mostra una tendenza alla crescita costante, faticando a catturare le oscillazioni di breve periodo della serie reale.
+
+-   **Performance dei Modelli Multivariati (**$\text{ARIMAX}$ **e** $\text{TFM}$**):**
+
+    -   L'$\text{ARIMAX}$(linea rossa) tende a sovrastimare i livelli di produzione nell'ultima parte del campione, pur avendo mostrato un'ottimo adattamento nell'insieme di stima.
+
+    -   L'$\text{ARIMAX}$ con le variabili esogene stimate tramite un $\text{ARIMA}$(linea verde chiaro) tende seguire l'adamento del $\text{VECM}$ e si nota una chiara differenza tra le stime con le variabili esogene note e stimate.
+
+    -   Il $\text{TFM}$ (linea verde) sembra seguire una traiettoria più vicina a quella reale nella prima fase, per poi divergere verso l'alto insieme all'$\text{ARIMA}$.
+
+-   **Modelli VAR (Statico e Dinamico):**
+
+    -   Il $\text{VAR}$ **statico** (linea viola) mostra una chiara tendenza alla sottostima sistematica, posizionandosi stabilmente al di sotto della serie reale.
+
+    -   Il $\text{VAR}$ **dinamico** (linea gialla), sembra essere il modello che prevede meglio l'andamento della produzione industriale dell'insieme di stima, si nota però che le previsioni hanno una varibilità maggiore rispetto ad altri modelli adattati.
+
+-   **Modello VECM:**
+
+    -   **Performance del VECM (linea marrone):** La traiettoria del modello VECM si posiziona in un'area intermedia del grafico. Coerentemente con quanto emerso dall'analisi dei coefficienti di aggiustamento ($\alpha$), il modello non mostra un "richiamo" verso l'equilibrio di lungo periodo sufficientemente forte da divergere drasticamente dagli altri modelli multivariati.
+
+    -   **Confronto VECM vs VAR:** È interessante notare come il VECM, pur incorporando la relazione di cointegrazione, non riesca a migliorare significativamente il VAR dinamico in questo specifico orizzonte di test. Ciò conferma che, per le serie analizzate, le dinamiche di breve periodo sono predominanti rispetto ai meccanismi di riequilibrio strutturale di lungo periodo.
+
+### Errori di previsione e metriche
+
+```{r,message=FALSE,fig.height=8,fig.width=11,dpi=400,fig.cap="Distribuzione approssimata degli errori di previsione per ciascun modello adattato."}
+# ---------------------------------------------------------
+# Calcolo dei vettori di errore
+# ---------------------------------------------------------
+
+e_arima  <- actual_prod - pred_arima
+e_arimax <- actual_prod - pred_arimax_expost
+e_arimax_esog_prev <- actual_prod - pred_arimax_exante
+e_tfm    <- actual_prod - pred_tfm
+e_var_s  <- actual_prod - pred_var_statico
+e_var_d  <- actual_prod - pred_var_dim
+e_VECM   <- actual_prod - pred_vecm
+
+par(mfrow=c(3,3))
+plot(density(e_arima),main="ARIMA")
+plot(density(e_arimax),main="ARIMAX")
+plot(density(e_arimax_esog_prev),main="ARIMAX - Con esogene previste")
+plot(density(e_tfm),main="TFM")
+plot(density(e_var_s),main="VAR-Statico")
+plot(density(e_var_d),main="VAR-Dinamico")
+plot(density(e_VECM),main="VECM")
+
+Lista_errori <- list(
+  ARIMA  = e_arima,
+  ARIMAX = e_arimax,
+  ARIMAX_Eso_Prev = e_arimax_esog_prev,
+  TFM    = e_tfm,
+  VAR_S  = e_var_s,
+  VAR_D  = e_var_d,
+  VECM = e_VECM
+)
+
+# ---------------------------------------------------------
+# Calcolo dei vettori di errore assoluti
+# ---------------------------------------------------------
+Lista_errori_abs <- list(
+  ARIMA = abs(e_arima),
+  ARIMAX = abs(e_arimax),
+  ARIMAX_Eso_Prev = abs(e_arimax_esog_prev),
+  TFM   = abs(e_tfm),
+  VAR_S   = abs(e_var_s),
+  VAR_D   = abs(e_var_d),
+  VECM = abs(e_VECM)
+)
+
+# ---------------------------------------------------------
+# Funzione per le statistiche descrittive degli errori
+# ---------------------------------------------------------
+
+calc_stats <- function(x) {
+  c(
+    Mediana  = median(x, na.rm = TRUE),# Indice di posizione più robusto
+    Varianza = var(x, na.rm = TRUE),   # Variabilità dell'errore
+    Dev_Std  = sd(x, na.rm = TRUE)     # Volatilità dell'errore
+  )
+}
+
+# ---------------------------------------------------------
+# Creazione del Dataframe finale
+# ---------------------------------------------------------
+
+df_stats_errori <- as.data.frame(t(sapply(Lista_errori_abs, calc_stats)))
+
+df_stats_errori <- round(df_stats_errori, 4)
+print(df_stats_errori)
+```
+
+#### Distribuzione e Dispersione degli Errori
+
+L'analisi degli indici di posizione e variabilità offre ulteriori spunti sulla stabilità dei modelli e sull'impatto della previsione delle esogene:
+
+-   **Mediana degli Errori:** L'$\text{ARIMAX}$ (Ex-Post) mantiene la mediana più contenuta ($0.3207$), rappresentando lo scenario ideale. Tuttavia, è fondamentale notare come l'$\text{ARIMAX}$ con esogene previste registri una mediana di $0.3579$. Sebbene superiore al caso ideale, questo valore rimane nettamente inferiore sia al benchmark $\text{ARIMA}$ ($0.3974$) che al $\text{VAR}$ Dinamico ($0.3802$). Ciò dimostra che, anche introducendo l'errore di previsione delle covariate, la struttura del modello cattura meglio la tendenza centrale della serie rispetto agli approcci alternativi.
+
+-   **Varianza e Stabilità:** L'$\text{ARIMA}$ univariato si conferma estremamente stabile con una varianza di $0.1498$, leggermente inferiore a quella dell'$\text{ARIMAX}$ con esogene previste ($0.1516$). Questo risultato è coerente con la teoria: dover stimare occupazione e reddito aggiunge una fonte di "rumore" che aumenta leggermente la dispersione degli errori rispetto a un modello univariato puro. Tuttavia, la varianza di questo $\text{ARIMAX}$ rimane comunque inferiore a quella del $\text{VAR}$ Dinamico ($0.1549$) e nettamente migliore del $\text{VAR}$ Statico ($0.1936$) e del $\text{TFM}$ ($0.1881$).
+
+-   **Costo dell'Incertezza (Ex-Post vs Ex-Ante):** Il confronto tra le due versioni dell'$\text{ARIMAX}$ quantifica il valore del conoscere il futuro. Passando dalle esogene note a quelle previste, la deviazione standard dell'errore aumenta marginalmente da $0.3741$ a $0.3894$. Questo incremento contenuto suggerisce che i modelli ausiliari utilizzati per prevedere Occupazione e Reddito sono sufficientemente robusti da non compromettere la validità dell'approccio $\text{ARIMAX}$ in un contesto operativo reale.
+
+-   $\text{VECM}$: Il modello $\text{VECM}$, pur incorporando le relazioni di lungo periodo, mostra performance inferiori in termini di mediana ($0.4153$) e una varianza ($0.1641$) superiore sia all'$\text{ARIMA}$ che all'$\text{ARIMAX}$ (in entrambe le configurazioni), confermando la difficoltà nel tradurre la cointegrazione in vantaggi previsivi a breve termine per questo specifico dataset.
+
+```{r,message=FALSE}
+require(Metrics)
+
+# Tabella riassuntiva media
+results_media = data.frame(
+  MSE = c(mse(actual_prod, pred_arima), 
+          mse(actual_prod, pred_arimax_expost),
+          mse(actual_prod, pred_arimax_exante),
+           mse(actual_prod, pred_tfm), 
+           mse(actual_prod, pred_var_statico),
+          mse(actual_prod, pred_var_dim),
+          mse(actual_prod,pred_vecm)),
+  MAE = c(mae(actual_prod, pred_arima), 
+          mae(actual_prod, pred_arimax_expost),
+          mae(actual_prod, pred_arimax_exante),
+          mae(actual_prod, pred_tfm), 
+          mae(actual_prod, pred_var_statico),
+          mae(actual_prod, pred_var_dim),
+          mae(actual_prod,pred_vecm))
+)
+
+rownames(results_media) = c("ARIMA Univariato",
+                            "ARIMAX",
+                            "ARIMAX - Esog. prev.",
+                            "TFM (Stabile)",
+                            "VAR(2) - Stabile",
+                            "VAR(2) - Dinamico",
+                            "VECM")
+
+print(round(results_media,4))
+```
+
+#### Analisi delle Metriche Globali ($\text{MSE}$ e $\text{MAE}$)
+
+Le metriche aggregate offrono una visione chiara della gerarchia prestazionale dei modelli, confermando la solidità dell'approccio con variabili esogene anche in condizioni operative reali:
+
+-   $\text{ARIMAX}$ (Scenario Ideale/Ex-Post): rappresenta il benchmark assoluto del confronto, registrando l'errore medio più basso sia in termini di $\text{MSE}$ ($0.3376$) che di $\text{MAE}$ ($0.4476$). Questo valore rappresenta il limite teorico raggiungibile conoscendo perfettamente il futuro delle esogene.
+
+-   $\text{ARIMAX}$ con Esogene Previste (Ex-Ante): Il modello $\text{ARIMAX}$ alimentato con le stime di Occupazione e Reddito (ottenute tramite modelli $\text{ARIMA}$ ausiliari) registra un $\text{MSE}$ di $0.3649$ e un $\text{MAE}$ di $0.4651$. Sebbene si osservi un fisiologico incremento dell'errore rispetto allo scenario ideale ($+8\%$ circa sul $\text{MSE}$), questo modello è comunque migliore rispetto a tutti gli altri approcci alternativi ($\text{ARIMA}$, $\text{TFM}$, $\text{VAR}$, $\text{VECM}$). Ciò dimostra che il guadagno informativo derivante dalla struttura $\text{ARIMAX}$ supera il "rumore" introdotto dalla necessità di stimare i regressori.
+
+-   $\text{ARIMA}$: Rappresenta un solido competitor con un $\text{MSE}$ di $0.4090$ e un $\text{MAE}$ di $0.5120$. Sebbene il suo errore medio assoluto ($\text{MAE}$) sia superiore al $\text{TFM}$ e al $\text{VECM}$, il suo errore quadratico ($\text{MSE}$) è contenuto, indicando una buona capacità di evitare errori estremi (outlier), superando in stabilità i modelli multivariati complessi.
+
+-   $\text{VECM}$: Il modello a correzione dell'errore mostra una performance intermedia, con un $\text{MSE}$ di $0.4123$ e un $\text{MAE}$ di $0.5014$. Pur catturando le relazioni di lungo periodo, non riesce a eguagliare la precisione puntuale dell'$\text{ARIMAX}$ (anche nella versione con esogene previste), suggerendo che il riequilibrio di lungo periodo ha un impatto limitato sulla previsione a breve termine ($h=1$).
+
+-   $\text{TFM}$: Ottiene un buon risultato in termini di $\text{MAE}$ ($0.4904$), posizionandosi meglio dell'$\text{ARIMA}$ e del $\text{VECM}$ su questa metrica. Tuttavia, il $\text{MSE}$ più elevato ($0.4250$) segnala una maggiore varianza negli errori, penalizzando la valutazione complessiva rispetto ai modelli $\text{ARIMAX}$.
+
+-   $\text{VAR(2)}$: Entrambe le versioni, statico ($\text{MAE}$ $0.5189$) e dinamico ($\text{MAE}$ $0.5191$), mostrano le performance peggiori del set. L'elevato numero di parametri da stimare sembra introdurre una quota di rumore statistico che degrada la precisione predittiva nell'insieme di test rispetto agli approcci a singola equazione.
+
+In conclusione, l'analisi dimostra che l'$\text{ARIMAX}$ è la scelta migliore: la versione con esogene previste mantiene un vantaggio competitivo netto, con un $\text{MSE}$ ($0.3649$) inferiore a quello del miglior modello alternativo.
+
+```{r}
+# Tabella per visualizzare l'errore puntuale (per i primi 12 mesi)
+res_puntuale = data.frame(
+  Mese = 1:n_test,
+  Error_ARIMA = abs(e_arima),
+  Error_ARMAX = abs(e_arimax),
+  Error_TFM   = abs(e_tfm),
+  Error_VAR_S   = abs(e_var_s),
+  Error_VAR_D   = abs(e_var_d),
+  Error_VECM   = abs(e_VECM)
+)
+
+print(round(res_puntuale[1:12,],4))
+```
+
+#### Test di Diebold-Mariano
+
+Ora per verificare che gli errori di previsione siano significativamente diversi tra i modelli si procede con i test di Diebold-Mariano.
+
+```{r}
+# ---------------------------------------------------------
+# Matrice Completa del Test di Diebold-Mariano
+# ---------------------------------------------------------
+
+mod_names <- names(Lista_errori)
+n_mod <- length(mod_names)
+
+dm_matrix <- matrix(NA, nrow = n_mod, ncol = n_mod)
+rownames(dm_matrix) <- mod_names
+colnames(dm_matrix) <- mod_names
+
+# Loop per riempire la matrice con i p-value
+# H0: Il modello i e il modello j hanno la stessa accuratezza (MSE)
+# H1: Il modello i è più accurato del modello j (alternative = "less")
+for (i in 1:n_mod) {
+  for (j in 1:n_mod) {
+    if (i != j) {
+      test_res <- forecast::dm.test(Lista_errori[[i]],
+                                    Lista_errori[[j]], h = 1,
+                                    alternative = "less")
+      dm_matrix[i, j] <- test_res$p.value
+    }
+  }
+}
+
+# Arrotondamento per una migliore visualizzazione
+# Matrice dei p-value di D-M (H1: riga più accurata di colonna):
+print(round(dm_matrix, 4))
+```
+
+Il modello con esogene note si conferma il migliore in assoluto. Supera in modo statisticamente significativo $\text{ARIMA}$ ($p=0.049$) e $\text{TFM}$ ($p=0.024$), dimostrando che l'informazione "perfetta" delle variabili esterne è determinante. Il risultato più rilevante è che l'$\text{ARIMAX}$ mantiene la sua superiorità anche dovendo stimare gli input. È statisticamente più accurato del $\text{VAR}$ (sia statico che dinamico) con un livello di confidenza del 95% ($p < 0.05$) e supera il $\text{VECM}$ al limite della significatività ($p=0.052$). Quindi la complessità dei sistemi multivariati ($\text{VAR}$, $\text{VECM}$) non paga l'approccio a singola equazione $\text{ARIMAX}$, anche nella sua versione operativa reale, è statisticamente preferibile per prevedere la produzione industriale.
+
+#### Conclusioni
+
+In conclusione, l’$\text{ARIMAX}$ emerge come il modello più performante del confronto, superando le iniziali impressioni visive fornite dal grafico dei livelli. Sebbene a un’occhiata superficiale le traiettorie possano apparire simili o talvolta scostate, l'analisi analitica rivela che l’$\text{ARIMAX}$ offre non solo l’errore medio più basso ($\text{MAE}$ di $0.4476$), ma anche la maggiore stabilità predittiva, testimoniata dalla minor varianza degli errori ($0.1399$).
+
+Per comprendere appieno questo risultato, è fondamentale spiegare come la varianza influenzia le metriche di errore:
+
+-   **Varianza e Precisione:** Una varianza contenuta indica che gli errori del modello sono concentrati vicino alla loro media, rendendo le previsioni più affidabili e costanti nel tempo.
+
+-   **Impatto sul MSE**: Poiché il $\text{Mean Squared Error}$ **(**$\text{MSE}$**)** eleva gli scostamenti al quadrato, esso è estremamente sensibile ai valori anomali; l'$\text{ARIMAX}$, avendo la varianza più bassa, evita i grandi errori che invece penalizzano modelli più complessi come il $\text{VAR}$.
+
+-   **Affidabilità rispetto al** $\text{MAE}$: Mentre il $\text{MAE}$ descrive l'errore tipico, la bassa varianza dell'$\text{ARIMAX}$ assicura che tale errore non oscilli drasticamente tra i mesi, garantendo una precisione superiore anche nelle fasi di maggiore volatilità della serie.
+
+In sintesi, la combinazione di un errore medio ridotto e di una varianza minima conferma che l’$\text{ARIMAX}$ è il modello che meglio bilancia l'accuratezza puntuale con la stabilità complessiva del sistema.
+
+## Conclusioni Finali
+
+Il presente studio ha analizzato le dinamiche intercorrenti tra produzione industriale, occupazione e reddito personale reale negli Stati Uniti, delineando un sistema caratterizzato da forti interdipendenze.
+
+L’analisi delle Impulse Response Functions e della Causalità di Granger ha evidenziato il ruolo della produzione industriale come motore primario del ciclo economico. Gli shock produttivi si trasmettono con rapidità al mercato del lavoro e, successivamente, al reddito delle famiglie, confermando una struttura di trasmissione "dal lato dell'offerta" che sostiene la domanda aggregata.
+
+Sul piano della modellistica predittiva, il confronto tra approcci univariati e multivariati ha evidenziato un chiaro compromesso tra complessità e accuratezza. Sebbene il modello $\text{VAR(2)}$ sia stato in grado di catturare le interazioni endogene del sistema con eccellente aderenza ai dati storici, il modello $\text{ARIMAX}$ è risultato il migliore in termini di capacità previsiva nell'insieme di verifica. La superiorità dell’$\text{ARIMAX}$, validata statisticamente dal test di Diebold-Mariano, dimostra che l’integrazione mirata di variabili esogene (occupazione e reddito) permette di ridurre la varianza dell'errore rispetto ai modelli puramente autoregressivi, senza incorrere nei rischi di sovradattamento tipici dei sistemi $\text{VAR}$.
+
+In sintesi, i risultati suggeriscono che per il monitoraggio dei tassi di crescita della produzione industriale, un approccio che combini la struttura $\text{ARIMA}$ con l'informazione contemporanea del mercato del lavoro offra il miglior bilanciamento tra rigore teorico e affidabilità operativa.
+
+\newpage
+
+# Appendice {.unnumbered}
+
+## Uso Intelligenza Artificiale
+
+L'intelligenza artificiale per la realizzazione di questo eleaboarto è stata utilizzata per diverse cose:
+
+-   Consigli e validazione dell'interpretazione economica delle serie storiche prese in considerazione.
+
+-   Correzione eventuali errori grammaticali o di sintassi nei commenti e nelle interpretazioni.
+
+-   Aiuto a livello di codice in particolare:
+
+    -   Grafici con la libreria *ggplot*.
+
+    -   Ottimizzazione del codice per il calcolo delle previsioni dei modelli e metriche degli errori.
+
+    -   Costruzione dei cicli *for* per la creazione della matrice relativa ai $p$-value dei test di Diebold-Mariano.
+
+-   Traduzioni di alcuni testi in inglese relativi a cosa facessero riferimento i codici delle serie storiche della *FRED.*
+
+-   Formattazione dei parametri per il render del file quarto (indice, descrizione sotto ai grafici, ecc.)

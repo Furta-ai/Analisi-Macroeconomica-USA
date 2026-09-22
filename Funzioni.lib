@@ -1,0 +1,732 @@
+# Funzioni per modelli ARIMA
+
+check_stationarity_invertibility = function(model) {
+
+  ar_coefs = model$coef[grep("ar", names(model$coef))]
+  ma_coefs = model$coef[grep("ma", names(model$coef))]
+  
+  ar_roots = if (length(ar_coefs) > 0) polyroot(c(1, -ar_coefs)) else numeric(0)
+  ma_roots = if (length(ma_coefs) > 0) polyroot(c(1, ma_coefs)) else numeric(0)
+  
+  ar_moduli = Mod(ar_roots)
+  ma_moduli = Mod(ma_roots)
+  
+  ar_stationary = all(ar_moduli > 1)
+  ma_invertible = all(ma_moduli > 1)
+  
+  list(stationary = ar_stationary, invertible = ma_invertible)
+}
+
+significativita_arima = function(modello_arima) {
+
+  coefficienti = modello_arima$coef
+  errori_standard = sqrt(diag(modello_arima$var.coef))
+  
+  t_values = coefficienti / errori_standard
+  
+  p_values = 2 * (1 - pnorm(abs(t_values)))
+  
+  risultati = data.frame(
+    Coefficiente = coefficienti,
+    `Errore Standard` = errori_standard,
+    `Valore t` = t_values,
+    `P-value` = p_values
+  )
+  
+  return(risultati)
+}
+
+
+calculate_MSE = function(observed, predicted) {
+  mse = mean((observed - predicted)^2)
+  return(mse)
+}
+
+test.dm = function(fitted1,fitted2,set,M){
+for(i in 1:length(set)){
+d1 = (set[i]-fitted1[i])^2
+d2 = (set[i]-fitted2[i])^2
+}
+d = mean(d1-d2)
+I = round(M^(1/3),0)
+gamma_d = cov(d1,d2)
+var_d = sum(gamma_d[1:I])
+DM = d/sqrt(var_d /M)
+return(DM)
+}
+
+stat.mod=function(fit.y,maxlag=35,ordini=0)
+{
+  Coef=fit.y$coef
+  Std.Err=sqrt(diag(fit.y$var.coef))
+  tstat=fit.y$coef/sqrt(diag(fit.y$var.coef))
+  pval=2*pnorm(abs(tstat),lower.tail=F)
+  tabella=data.frame(Coef,Std.Err,tstat,pval)
+  sigma2=fit.y$sigma2
+  names(sigma2)="sigma2"
+  loglik=fit.y$loglik
+  names(loglik)="loglik"
+  BIC=BIC(fit.y)
+  names(BIC)="BIC"
+  AIC=fit.y$aic
+  names(AIC)="AIC"
+  cc1=Ljung.Box(fit.y$resid,maxlag,ordini)
+  riga0="-------------- Stime dei parametri -----------"
+  names(riga0)=" "
+  riga="-----------------------------------------------"
+  names(riga)=" "
+  print(riga0, quote=F)
+  print(tabella)
+  print(riga, quote=F)
+  riga2="-------------Test di Ljung-Box ---------------"
+  names(riga2)=" "
+  print(c(sigma2,BIC,AIC,loglik))
+  print(riga2, quote=F)
+  print(t(cc1))
+}
+
+# Test di Ljung-Box
+
+Ljung.Box= function (x, lag = 15, param=1)
+{
+  if (NCOL(x) > 1)
+    stop ("x is not a vector or univariate time series")
+  DNAME = deparse(substitute(x))
+  cor = acf (x, lag.max = lag, plot = FALSE)
+  n = length(x)
+  PARAMETER = lag-param
+  obs = cor$acf[2:(lag+1)]
+  STATISTIC = n*(n+2)*sum((1/seq(n-1,n-lag))*obs^2)
+  PVAL = 1-pchisq(STATISTIC,lag-param)
+  return(list(statistic=STATISTIC,
+              gdl = PARAMETER,
+              pvalue = PVAL))
+}
+
+
+# Test di Ljung-Box
+
+Ljung.Box.2=function(x, maxlag=20, par=0, all=TRUE)
+{
+  if (all==TRUE) {
+    LB=matrix(0,nrow=maxlag, ncol=3)
+    dimnames(LB)=list(NULL, c("statistic", "gdl","pvalue"))
+    for (i in (par+1): maxlag) {
+      lbi=Ljung.Box(x, lag=i, param=par)
+      LB[i,]=c(round(lbi$statistic,2), lbi$gdl, lbi$pvalue)
+    }
+    plot(LB[,3], type="h", lwd=4, ylim=c(0,1), main="Ljung-Box test", ylab="p-value", xlab="k")
+    abline(h=0.05, lty=2, col="red")
+    abline(h=0)
+  }
+  if (all==FALSE) LB=Ljung.Box(x, lag=maxlag, param=par)
+  
+  return(LB)
+}
+
+# Funzione per aggiornemnto livello di aggrgazione
+# Data.frame con i rendimenti
+# agg.period il periodo di riferimento (esempio 22 per i mensile)
+
+agg.stat=function(r,agg.period){
+  a=dim(r)
+  N=a[2]
+  T=a[1]
+  BS=basicStats(r)
+  # matrici per la memorizzazione dei risultati
+  SK=matrix(0,agg.period,N)
+  KU=matrix(0,agg.period,N)
+  JBt=matrix(0,agg.period,N)
+  JBp=matrix(0,agg.period,N)
+  DAt=matrix(0,agg.period,N)
+  DAp=matrix(0,agg.period,N)
+  KSt=matrix(0,agg.period,N)
+  KSp=matrix(0,agg.period,N)
+  
+  # valori iniziali
+  SK[1,]=as.matrix(BS[15,])
+  KU[1,]=as.matrix(BS[16,])
+  # ciclo per il calcolo degli indicatori
+  for (g in 2:agg.period) {
+    Tog=floor(T/g)
+    That=Tog*g
+    r1=as.matrix(r[1:That,])
+    Tg=diag(Tog) %x% matrix(1,1,g)
+    rg=Tg%*%r1
+    BS=basicStats(rg)
+    SK[g,]=as.matrix(BS[15,])
+    KU[g,]=as.matrix(BS[16,])
+  }
+  
+  for (g in 1:agg.period) {
+    Tog=floor(T/g)
+    That=Tog*g
+    r1=as.matrix(r[1:That,])
+    Tg=diag(Tog) %x% matrix(1,1,g)
+    rg=Tg %*% r1
+    for (i in 1:N) {
+      out=jarqueberaTest (rg[,i])
+      JBt[g,i]=out@test$statistic
+      JBp[g,i]=out@test$p.value
+      out=dagoTest(rg[,i])
+      DAt[g,i]=out@test$statistic[1]
+      DAp[g,i]=out@test$p.value[1]
+      out=ksnormTest(rg[,i])
+      KSt[g,i]=out@test$statistic[1]
+      KSp[g,i]=out@test$p.value[1]
+    }
+  }
+  return(list(SK=SK,KU=KU,JBt=JBt,DAt=DAt,KSt=KSt))
+}
+
+
+
+# Test ADF
+
+lag.ADF = function(p,lag=21){
+  out1 = adfTest(p,lags=lag,type="c")
+  sum = summary(out1@test$lm)
+  lag.max = 0
+  for(i in seq(from = (lag+2), to = 3, by = -1)){
+    if(sum$coefficients[i,4] <= 0.1){
+      lag.max = i
+      return( lag.max - 2 )
+    }
+  }
+}
+
+
+################################################################################
+################################################################################
+################          FUNZIONI PARTE MARKOVITZ         #####################
+################################################################################
+################################################################################
+
+# Funzione che determina i valori A, B, C e De o plotta la Frontiera Efficiente
+# Accesso ai valori nome_variabile[[X]], dove:
+# X = 1 --> $A, $B, $C, $De
+# X = 2 --> $s / $ro (valori per tracciare F.E.)
+
+front.eff = function(r,do_plot = F){
+  #frontiera efficiente non vincolata
+  # Vettore di 1
+  mS = colMeans(r)
+  V = var(r)
+  N = ncol(r)
+  iv=matrix(1,nrow=N,ncol=1)
+  # A, B, C e Delta
+  A=t(mS)%*%inv(V)%*%mS
+  B=t(iv)%*%inv(V)%*%mS
+  C=t(iv)%*%inv(V)%*%iv
+  De=A*C-B*B
+  # fisso i valori del rendimento obiettivo (arrotondato).
+  l=floor(min(mS*100))/100 #minimo rendimento mesile
+  u=floor(max(mS*100))/100*4 #massimo rendimento mesile
+  #floor funzione che arrotonda
+  ro=as.matrix(seq(l,u,by=0.05))
+  M=dim(ro)
+  s=sqrt(matrix(C/De,M[1],1)*(ro^2)-2*matrix(B/De,M[1],1)*ro + matrix(A/De,M[1],1))
+  # Plot FE
+  # Solo se do_plot è TRUE, il grafico sarà plottato
+  if (do_plot) {
+    plot(s, ro, xlab="Rischio", ylab="Rendimento", type="l",
+         main="Frontiera Efficiente senza vincolo di positività", col.main="red")
+  }
+  FE = data.frame(s,ro)
+  colnames(FE) = c("s","ro")
+  front.par = data.frame(A,B,C,De)
+  colnames(front.par) = c("A","B","C","De")
+  oggetti = list(front.par,FE)
+  return(oggetti)
+}
+
+# Funzione che calcola il portafoglio di minima varianza dato un vettore di rendimenti
+# Opzione per plottare anche la composizione del portafoglio
+
+port.mv = function(r,do_plot = F){
+  mS = colMeans(r)
+  V = var(r)
+  N = ncol(r)
+  iv=matrix(1,nrow=N,ncol=1)
+  wGMV=inv(V)%*%iv
+  wGMV=wGMV/sum(wGMV)
+  rGMV=t(wGMV)%*%mS
+  sGMV=t(wGMV)%*%V%*%wGMV
+  port = data.frame(sqrt(sGMV),rGMV)
+  colnames(port) = c("Volatilità","Rendimento")
+  if (do_plot) {
+    barplot(t(wGMV),las=2,
+            main="Pesi di Portafoglio a Varianza Minima Globale",
+            col.main = "red",col="lightblue")
+  }
+  return(port)
+}
+
+
+# Funzione che calcola il portafoglio di minima varianza dato un vettore di rendimenti
+# Opzione per plottare anche la composizione del portafoglio
+
+port.mtoff = function(r,do_plot = F){
+  mS = colMeans(r)
+  V = var(r)
+  N = ncol(r)
+  iv=matrix(1,nrow=N,ncol=1)
+  wMT=inv(V)%*%mS
+  wMT=wMT/sum(wMT)
+  rMT=t(wMT)%*%mS
+  sMT=t(wMT)%*%V%*%wMT
+  port = data.frame(sqrt(sMT),rMT)
+  colnames(port) = c("Volatilità","Rendimento")
+  if (do_plot) {
+    barplot(t(wMT),las=2, main="Pesi di Portafoglio di Massimo Trade-Off",
+            col.main = "red",col="lightblue")
+  }
+  return(port)
+}
+
+# Funzione per calcolare la frontiera efficiente con vincolo di positività
+
+front.eff.vinc = function(t,r,do_plot=F,wthmv = F,wthtoff=F){
+  #frontiera efficiente con vincolo di positività
+  # dati di input - rendimenti in formato xts
+  V = var(r)
+  library(timeDate)
+  Sys.setenv(TZ = "GMT")
+  S1V=xts(r,order.by=as.POSIXct(t, tz = "GMT"))
+  # determinazione frontiera efficiente e raffronto con non vicolata
+  lo.portf=portfolio.spec(assets=colnames(S1V))
+  unc.portf=portfolio.spec(assets=colnames(S1V))
+  unc.portf=add.constraint(portfolio=unc.portf, type="full_investment")
+  lo.portf=add.constraint(portfolio=lo.portf, type="long_only")
+  portf.list = combine.portfolios(list(unc.portf, lo.portf))
+  if (do_plot) {
+    legend.labels = c("Unconstrained", "Long only")
+    chart.EfficientFrontierOverlay(R=S1V, portfolio=portf.list, type="mean-StdDev",
+                match.col="StdDev",labels.assets=T, pch.assets=18,cex.assets = 0.5,
+                legend.loc="topleft",legend.labels=legend.labels, cex.legend=0.6)
+    if (wthmv){
+      min_var_port_vinc = port.mv.vinc(t,r)
+      min_var_port = port.mv(r)
+      points(min_var_port$Volatilità,min_var_port$Rendimento,col="red")
+      points(sqrt(t(min_var_port_vinc$weights)%*%V%*%min_var_port_vinc$weights),
+             t(min_var_port_vinc$weights)%*%colMeans(S1V),pch=20,col="red",bg="red")
+    }
+    if (wthtoff){
+      max_tradeoff_port_vinc = port.mtoff.vinc(t,r)
+      max_tradeoff_port = port.mtoff(r)
+      points(max_tradeoff_port$Volatilità,max_tradeoff_port$Rendimento,col="green")
+      points(max_tradeoff_port_vinc[2],
+             max_tradeoff_port_vinc[1],pch=20,col="green")
+    }
+
+  }
+  
+  return(lo.portf)
+}
+
+# Funzione che calcola il portafoglio di minima varianza in caso di portafoglio
+# vincolato con pesi positivi
+
+port.mv.vinc = function(t,r,do_plot=F){
+  library(timeDate)
+  Sys.setenv(TZ = "GMT")
+  S1V=xts(r,order.by=as.POSIXct(t, tz = "GMT"))
+  lo.portf = front.eff.vinc(t,r)
+  # Aggiungere obiettivi di massimizzazione del rapporto rendimento-rischio
+  lo.portf = add.objective(portfolio = lo.portf, type = "risk", name = "var")
+  # Ottimizzare il portafoglio
+  min_var_port_vinc = optimize.portfolio(R = S1V, portfolio = lo.portf, optimize_method ="ROI")
+  if (do_plot) {
+    barplot(t(min_var_port_vinc$weights),las=2, main="Pesi del Portafoglio con varianza minima globale\ncon vincolo di positività",
+            col.main = "red",col="lightblue")
+  }
+  return(min_var_port_vinc)
+}
+
+# Funzione che calcola il portafoglio di trade off in caso di portafoglio
+# vincolato con pesi positivi
+
+port.mtoff.vinc = function(t,r,do_plot=F){
+  library(timeDate)
+  Sys.setenv(TZ = "GMT")
+  S1V=xts(r,order.by=as.POSIXct(t, tz = "GMT"))
+  lo.portf = front.eff.vinc(t,r)
+  # Creiamo la frontiera con il portafoglio vincolato
+  long.ef = create.EfficientFrontier(R=S1V, portfolio=lo.portf, type="mean-StdDev")
+  # Determiniamo portafoglio di massimo trade-off
+  k = long.ef$frontier[1:nrow(long.ef$frontier),1]/long.ef$frontier[1:nrow(long.ef$frontier),2]
+  max_tf_port_vinc = long.ef$frontier[which.max(k),1:2]
+  return(max_tf_port_vinc)
+}
+
+# Funzione che calcola il portafoglio di tangenza e plotta il grafico con
+# SML, FE, portafoglio di tangenza e minima varianza globale
+# Accesso ai valori nome_variabile[[X]], dove:
+# X = 1 --> $Volalità / $Rendimento
+# X = 2 --> $s1 / $ro1 (valori per tracciare CML)
+
+calcola.prt.tang = function(rf,r,do_plot = F){
+  mS = colMeans(r)
+  V = var(r)
+  N = ncol(r)
+  iv=matrix(1,nrow=N,ncol=1)
+  FE = front.eff(r)
+  l=floor(min(mS*100))/100
+  u=floor(max(mS*100))/100*4
+  ro=as.matrix(seq(l,u,by=0.05))
+  M=dim(ro)
+  ro1=as.matrix(seq(rf,u,by=0.05)) # nuova sequenza min e max
+  sh=sqrt(FE[[1]]$A-2*FE[[1]]$B*rf+FE[[1]]$C*rf*rf)
+  s1=(ro1-rf)%*%(sh^(-1))
+  wT= inv(V)%*%(mS-rf) 
+  wT=wT/sum(wT)
+  rT=t(wT)%*%mS
+  sT=t(wT)%*%V%*%wT
+  CML = data.frame(s1,ro1)
+  colnames(CML) = c("s1","ro1")
+  prt.tang = data.frame(sqrt(sT),rT,sh)
+  colnames(prt.tang) = c("Volatilità","Rendimento","Sh")
+  if (do_plot) {
+    plot(s1,ro1,type="l",col="blue",xlab="Rischio",ylab="Rendimento",main="Frontiera efficiente con titolo privo di rischio e rappresenatazione\nportafogli di tangenza e di minima varianza globale",col.main="red")
+    lines(FE[[2]]$s,FE[[2]]$ro,type="l")
+    points(sqrt(sT),rT,pch=20,col="orange",bg="orange")
+    points(0,rf,pch=20,col="red",bg="red")
+    legend("topleft",legend = c("Port. di tangenza","rf","F.E.","CML"),
+           col=c("orange","red","black","blue"),
+           pch = c(20,20,NA,NA),
+           lty = c(0, 0,1,1),
+           bty = "n",
+           cex=0.6)
+  }
+  oggetti = list(prt.tang,CML,wT)
+  return(oggetti)
+}
+
+
+# Funzione che calcola il portafoglio ottimo per un agente avverso al rischio
+
+port.avv.rf = function(rf,r,avv){
+  frontiera=front.eff(r)
+  w = ((frontiera[[1]]$B-frontiera[[1]]$C*rf)/avv)*port.tang[[3]]
+  r_avv = t(w)%*%colMeans(r_titoli) + (1-sum(w))*rf
+  s_avv = sqrt(t(w)%*%var(r_titoli)%*%w)
+  port.tang = calcola.prt.tang(rf,r_titoli,do_plot = T)
+  points(s_avv,r_avv,col="brown",pch=20)
+  oggetti = list(w,r_avv,s_avv)
+  names(oggetti)=c("pesi","Rendimento","sd")
+  return(oggetti)
+}
+
+# Funzione che confronta due portfogli di tangenza con in input
+# un titoli risk free e i vettori dei log-rendimenti dei
+# relativi titoli
+
+confr.grf.tang = function(rf,r,r2){
+  CML1 = calcola.prt.tang(rf,r)
+  CML2 = calcola.prt.tang(rf,r2)
+  FE1 = front.eff(r)
+  FE2 = front.eff(r2)
+  plot(CML1[[2]]$s1,CML1[[2]]$ro1,type="l",col="blue",xlab="Rischio",ylab="Rendimento",
+       main="Confronto frontiere efficienti con titolo privo di rischio e\nrappresenatazione portafogli di tangenza e portafoglio di minima varianza globale",
+       col.main="red",cex.main=0.95)
+  lines(FE1[[2]]$s,FE1[[2]]$ro,type="l")
+  points(CML1[[1]]$Volatilità,CML1[[1]]$Rendimento,pch=20,col="orange",bg="orange")
+  lines(CML2[[2]]$s1,CML2[[2]]$ro1,type="l",col="blue")
+  lines(FE2[[2]]$s,FE2[[2]]$ro,type="l")
+  points(CML2[[1]]$Volatilità,CML2[[1]]$Rendimento,pch=20,col="orange",bg="orange")
+  points(0,rf,pch=20,col="red",bg="red")
+  legend("topleft",legend = c("Port. di tangenza","rf","F.E.","CML"),
+         col=c("orange","red","black","blue"),
+         pch = c(20,20,NA,NA),
+         lty = c(0, 0,1,1),
+         bty = "n",
+         cex=0.6)
+  #oggetti = list(CML2[[1]]$Rendimento,CML2[[1]]$Volatilità,CML2[[2]]$s1,CML2[[2]]$ro1)
+  #return(oggetti)
+}
+
+# Funzione che plotta la CLM con l'intervallo di confidenza
+
+ict.sh = function(rf,r){
+  port.tang = calcola.prt.tang(rf,r)
+  FE = front.eff(r)
+  plot(port.tang[[2]]$s1,port.tang[[2]]$ro1,type="l",col="blue",xlab="Rischio",ylab="Rendimento",main="Intervallo di confidenza per la FE",col.main="red")
+  points(port.tang[[1]]$Volatilità,port.tang[[1]]$Rendimento,pch=20,col="orange",bg="orange")
+  lines(FE[[2]]$s,FE[[2]]$ro,type="l")
+  sh = port.tang[[1]]$Sh
+  varsh = (1/T)*(1+0.5*sh*sh)
+  lines((port.tang[[2]]$ro1-rf)*((sh-sqrt(varsh)*qnorm(0.975))^(-1)),port.tang[[2]]$ro1,
+        type="l",col="red",lty=2)
+  lines((port.tang[[2]]$ro1-rf)*((sh-sqrt(varsh)*qnorm(0.025))^(-1)),port.tang[[2]]$ro1,
+        type="l",col="red",lty=2)
+  points(0,rf,col="red",pch=20)
+  legend("topleft",legend = c("CML port. di tangenza","port. di tangenza","ICT"),
+         col=c("blue","orange","red"),
+         pch=c(NA,20,NA),
+         lty = c(1,0,2),
+         bty = "n",
+         cex=0.7)
+}
+
+
+# Test di significatività di una performance di Sharpe
+
+test_sign.sh = function(rf,r){
+  port.tang = calcola.prt.tang(rf,r)
+  sh = port.tang[[1]]$Sh
+  varsh=(1/T)*(1+0.5*sh*sh) 
+  tsh=(sqrt(T)*sh)/(sqrt(1+((sh^2)/2)))
+  test = sh/sqrt(varsh)
+  risultato = abs(test) < 1.96
+  lista = list(test,risultato)
+  names(lista) = c("Stat. test","Si accetta H0 ?")
+  return(lista)
+}
+
+# Funzione per calcolare indice di Sharpe di un titolo
+
+calcola.sh = function(rf,titolo){
+  mu = mean(titolo)
+  sd = sqrt(var(titolo))
+  return(sh = (mu-rf)/sd)
+}
+
+# Test di significatività di una performance di Sharpe per un unico titolo
+
+test_sign.sh.titolo = function(rf,titolo){
+  sh = calcola.sh(rf,titolo)
+  varsh=(1/T)*(1+0.5*sh*sh) 
+  tsh=(sqrt(T)*sh)/(sqrt(1+((sh^2)/2)))
+  test = sh/sqrt(varsh)
+  risultato = abs(test) < 1.96
+  lista = list(test,risultato)
+  names(lista) = c("Stat.test","Si accetta H0 ?")
+  return(lista)
+}
+
+# Funzione per confronto di performance di sharpe
+
+test.port = function (T,sh1,sh2,rho12){
+  a = 2*(1-rho12) + (sh1^2)/2 + (sh2^2)/2 - sh1*sh2*rho12^2
+  Statistia.test.CS.F = (sqrt(T)*(sh1-sh2))/sqrt(a)
+  test = abs(Statistia.test.CS.F) <= 1.96
+  lista = list(Statistia.test.CS.F,test)
+  names(lista) = c("Valore stat. test","Esito")
+  return(lista)
+}
+
+
+# Funzione che esegue il test d'esclusione dati i due vettori dei log-rendimenti
+
+test.esclusione = function(rf,r,r2){
+  N = ncol(r)
+  N1 = ncol(r2)
+  N2 = N - N1
+  T = nrow(r)
+  frontiera = front.eff(r)
+  sh=sqrt(frontiera[[1]]$A-2*frontiera[[1]]$B*rf+frontiera[[1]]$C*rf*rf) # Indice di Sharpe N titoli
+  frontiera2 = front.eff(r2)
+  sh2=sqrt(frontiera2[[1]]$A-2*frontiera2[[1]]$B*rf+frontiera2[[1]]$C*rf*rf)
+  Excl.test=T*(sh^2-sh2^2)/(1+sh2^2) 
+  # P.value
+  pval.Excl.test=pchisq(Excl.test,N2,lower.tail=FALSE) #P[X>x]
+  tabella = data.frame(sh, sh2, Excl.test, pval.Excl.test)
+  colnames(tabella) = c("Indice tutti i titoli","Indice titoli esclusi","Stat. test","p-value")
+  return(tabella)
+}
+
+
+################################################################################
+################################################################################
+################          FUNZIONI PARTE MODELLI GARCH         #################
+################################################################################
+################################################################################
+
+
+# LM-ARCH test 
+
+lm.test = function(r, k = 5) {
+  r2 = r ^ 2
+  
+  y.l = matrix(NA, nrow = NROW(r), ncol = k)
+  
+  for (i in 1:k) {
+    y.l[, i] = lag.xts(r2, k = i)
+  }
+  p.val = rep(NA, k)
+  p.val = sapply(1:k, function(x) {
+    test = summary(lm(r2 ~ y.l[, 1:x]))$r.squared * (nrow(r)-2)
+    pchisq(test, x, lower.tail = F)
+  })
+  
+  return(p.val)
+}
+
+
+# Funzione per calcolo test di Diebold-Mariano tra due modelli, dati:
+# r = rendimento
+# spec0 = specificazione modello 1
+# spec1 = specificazione modello 2
+# ltrain = training size
+# ltest = test size
+# frefit = ogni quanto ristima il modello (osservazioni)
+
+dm.test1 = function(r,spec0, spec1, ltrain= 0, ltest = 0, frefit=0){
+  ret1=r-mean(r) #Devizione rispetto alla media
+  for0=ugarchroll(spec0,data=ret1,forecast.length=ltest,refit.every=frefit,window.size=ltrain,refit.window="moving")
+  for1=ugarchroll(spec1,data=ret1,forecast.length=ltest,refit.every=frefit,window.size=ltrain,refit.window="moving")
+  for0d=as.data.frame(for0)
+  for1d=as.data.frame(for1)
+  s0f=for0d$Sigma
+  s1f=for1d$Sigma
+  fall=cbind(s0f,s1f)
+  # Diebold - Mariano test
+  # valori effettivi (per la proxy della varianza vera)
+  rf0=for0d$Realized #rendimenti
+  rf1=for1d$Realized #rendimenti
+  # Funzioni di perdita
+  l0=(s0f^2-rf0^2)
+  l1=(s1f^2-rf1^2)
+  # Differenziali tra le funzioni di perdita
+  d=l0-l1
+  library(sandwich)
+  m=floor(0.75*((NROW(rf0))^(1/3)))
+  x1=as.vector(matrix(1,nrow=NROW(rf0)))
+  V=NeweyWest(lm(d~x1-1),lag=m,prewhite=0) #standard error di un modello linerare
+  return(mean(d)/sqrt(V))
+}
+
+
+#Funzione confronto criteri di informazione due modelli:
+# T:Numero di osservazioni del vettore dei rendimenti su cui sono stati stimati i modelli
+
+cfr.criteri = function(fit1,fit2,T){
+  criterio = data.frame(infocriteria(fit1)*T,infocriteria(fit2)*T)
+  colnames(criterio) = c("Modello 1","Modello 2")
+  criterio$'Si preferisce'
+  for(i in 1:4){
+    criterio$'Si preferisce'[i] = names(which.min(criterio[i,1:2]))
+  }
+  return(criterio)
+}
+
+
+#Funzione che calcola il BIC di una modello GARCH:
+
+bic_garch=function(fitted_garch){
+  LL=fitted_garch@fit$LLH
+  P=length(fitted_garch@fit$coef)
+  N=length(fitted_garch@fit$fitted.values)
+  (P*log(N))-(2*LL)
+}
+
+
+################################################################################
+################################################################################
+#######################         FUNZIONI CAPM         ##########################
+################################################################################
+################################################################################
+
+function.capm = function(Zi,Ze,rf=0){
+  beta = matrix(0,ncol(Zi),1)
+  betat =   matrix(0,ncol(Zi),1)
+  alpha =   matrix(0,ncol(Zi),1)
+  alphat =   matrix(0,ncol(Zi),1)
+  p.value.beta =  matrix(0,ncol(Zi),1)
+  rsqr.adj =   matrix(0,ncol(Zi),1)
+  Risk.prem = (rf)*matrix(1,nrow(Zi),ncol(Zi))
+  Prem.merc = Ze - rf
+  for (i in 1:ncol(Zi)){
+    CAPM = lm(Risk.prem[,i] ~ Prem.merc)
+    beta[i,1] = CAPM$coefficients[2]
+    alpha[i,1] = CAPM$coefficients[1]
+    sum = summary(CAPM)
+    rsqr.adj[i,1] = sum$r.squared
+    alphat[i,1]=sum$coefficients[1,3]
+    betat[i,1]=sum$coefficients[2,3]
+    
+  }
+  # Grafico scatter alfa e beta
+  plot(beta,alpha,main="Grafico scatter alfa e beta",col.main="red")
+  # Grafico beta significativi
+  sigbeta=beta*(abs(betat)>1.96)
+  plot(sigbeta,main="Grafico beta significativi",col.main="red")
+  # Grafico alfa significativi
+  sigalpha=alpha*(abs(alphat)>1.96)
+  plot(sigalpha,main="Grafico alpha significativi",col.main="red")
+  # bar plot degli R-quadro
+  barplot(t(rsqr.adj),xlab='Titoli',ylab='adj-R2',main="bar plot degli R-quadro",col.main="red")
+  # grafico SML
+  ExpRet=colMeans(Zi)
+  Rprem=mean(Ze)
+  plot(beta,ExpRet,main="Grafico della SML",col.main="red")
+  lines(beta,beta*Rprem)
+  points(1,Rprem, col="red")
+}
+
+
+cal.capm = function(rf,rE,rM){
+  rMe=as.matrix(rM-rf)
+  rEe=as.matrix(rE-(as.matrix(rf)%*%matrix(1,1,ncol(rE))))
+  alfa=matrix(0,ncol(rE),1)
+  beta=matrix(0,ncol(rE),1)
+  alfat=matrix(0,ncol(rE),1)
+  betat=matrix(0,ncol(rE),1)
+  r2a=matrix(0,ncol(rE),1)
+  for(i in 1:ncol(rE)){
+    out=lm(rEe[,i]~rMe)
+    dat=summary(out)
+    alfa[i]=dat$coefficients[1,1]
+    alfat[i]=dat$coefficients[1,3]
+    beta[i]=dat$coefficients[2,1]
+    betat[i]=dat$coefficients[2,3]
+    r2a[i]=dat$adj.r.squared
+  }
+  # Grafico scatter alfa e beta
+  plot(beta,alfa)
+  # Grafico beta significativi
+  sigbeta=beta*(abs(betat)>1.96)
+  plot(sigbeta)
+  # Grafico alfa significativi
+  sigalfa=alfa*(abs(alfat)>1.96)
+  plot(sigalfa)
+  # bar plot degli R-quadro
+  barplot(t(r2a),xlab='Titoli',ylab='adj-R2')
+  # grafico SML
+  ExpRet=colMeans(rEe)
+  Rprem=colMeans(rMe)
+  plot(beta,ExpRet)
+  lines(beta,beta*Rprem)
+  points(1,Rprem, col="red")
+}
+
+# inferenza nel CAPM
+# test congiunto sugli Alfa
+# 1- nuova stima per salvare anche i residui
+test.CAPM = function(rf,rE,rM){
+  N = ncol(rE)
+  rMe=as.matrix(rM-rf)
+  rEe=as.matrix(rE-(as.matrix(rf)%*%matrix(1,1,N)))
+  alfa=matrix(0,N,1)
+  beta=matrix(0,N,1)
+  alfat=matrix(0,N,1)
+  betat=matrix(0,N,1)
+  r2a=matrix(0,N,1)
+  res=matrix(0,T,N)
+  for (i in 1:N){
+    out=lm(rEe[,i]~rMe)
+    dat=summary(out)
+    alfa[i]=dat$coefficients[1,1]  
+    alfat[i]=dat$coefficients[1,3]  
+    beta[i]=dat$coefficients[2,1]  
+    betat[i]=dat$coefficients[2,3]  
+    r2a[i]=dat$adj.r.squared
+    res[,i]=dat$residuals
+  }
+  G=cov(res)
+  # 2- costruzione della statistica test e calcolo P-value
+  testCAPM=T*((1+((mean(rMe)^2)/var(rMe)))^(-1))*(t(alfa)%*%inv(G)%*%alfa)
+  df=N
+  pvalCAPM=pchisq(testCAPM,df,lower.tail=FALSE)
+  return(pvalCAPM)
+}
